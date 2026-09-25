@@ -1,15 +1,16 @@
 import datetime
 import json
 
-from PyQt6 import QtCore, QtGui, QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets, QtSql
+from opensnitch.customwidgets.filterexpression import FilterError
 from PyQt6.QtCore import QCoreApplication as QC
 
 from opensnitch.config import Config
+from opensnitch.utils.themes import Themes
 from opensnitch.version import version
 from opensnitch.nodes import Nodes
 from opensnitch.firewall import Firewall
 from opensnitch.database.enums import AlertFields
-from opensnitch.dialogs.firewall import FirewallDialog
 from opensnitch.dialogs.preferences import PreferencesDialog
 from opensnitch.dialogs.ruleseditor import RulesEditorDialog
 from opensnitch.dialogs.processdetails import ProcessDetailsDialog
@@ -17,7 +18,7 @@ from opensnitch.customwidgets.firewalltableview import FirewallTableModel
 from opensnitch.customwidgets.generictableview import GenericTableModel
 from opensnitch.customwidgets.addresstablemodel import AddressTableModel
 from opensnitch.customwidgets.netstattablemodel import NetstatTableModel
-from opensnitch.utils import Message, QuickHelp, AsnDB, Icons
+from opensnitch.utils import Message, QuickHelp, AsnDB, GeoDB, Icons
 from opensnitch.utils.infowindow import InfoWindow
 from opensnitch.utils.xdg import xdg_current_desktop
 from opensnitch.actions import Actions
@@ -58,6 +59,7 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
 
         self.setWindowIcon(appicon)
         self.appicon = appicon
+        self.firewallPanel.appicon = appicon
 
         self._db = db
         self._db_sqlite = self._db.get_db()
@@ -83,7 +85,6 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
         self.nextButton.setVisible(False)
 
 
-        self.fwTable.setVisible(False)
         self.alertsTable.setVisible(False)
         self.rulesTable.setVisible(True)
 
@@ -92,7 +93,6 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
         self._address = address
         self._stats = None
 
-        self._fw_dialog = None
         self._prefs_dialog = None
         #self._prefs_dialog = PreferencesDialog(appicon=appicon)
         #self._prefs_dialog.saved.connect(self._on_settings_saved)
@@ -100,13 +100,32 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
         self._trigger.connect(self._on_update_triggered)
         self._notification_callback.connect(self._cb_notification_callback)
 
-        self.tabWidget.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
-        self.tabWidget.customContextMenuRequested.connect(self._cb_tab_context_menu)
+        self.sidebar.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
+        self.sidebar.customContextMenuRequested.connect(self._cb_tab_context_menu)
 
         self.nodeLabel.setText("")
-        self.nodeLabel.setStyleSheet('color: green;font-size:12pt; font-weight:600;')
-        self.rulesSplitter.setStretchFactor(0,0)
-        self.rulesSplitter.setStretchFactor(1,4)
+        self.nodeLabel.setStyleSheet('color: %s;font-size:12pt; font-weight:600;' % Themes.ok_color())
+        self.rulesSplitter.setStretchFactor(0, 1)
+        self.rulesSplitter.setStretchFactor(1, 4)
+        self._make_rules_splitter_timer()
+        self.rulesTreePanel.setMinimumWidth(160)
+        self.rulesTreePanel.setRootIsDecorated(False)
+        self.rulesTreePanel.setItemsExpandable(False)
+        self.rulesTreePanel.setIndentation(18)
+        self.rulesTreePanel.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self.rulesTreePanel.setStyleSheet(
+            "QTreeWidget { background: palette(window); border: none; outline: none; }"
+            "QTreeWidget::item { padding: 6px 8px; border: none; }"
+            "QTreeWidget::item:hover { background: palette(midlight); }"
+            "QTreeWidget::item:selected { background: palette(highlight); color: palette(highlighted-text); }"
+            "QTreeWidget::branch { border-image: none; image: none; background: transparent; }"
+            "QTreeWidget::branch:hover { background: palette(midlight); }"
+            "QTreeWidget::branch:selected { background: palette(highlight); }"
+        )
+        self.rulesTreePanel.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.rulesTreePanel.header().setStretchLastSection(True)
+        self.rulesTreePanel.header().setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        self.rulesTreePanel.expandAll()
         self.nodesSplitter.setStretchFactor(0,0)
         self.nodesSplitter.setStretchFactor(0,3)
         self.rulesTreePanel.resizeColumnToContents(1)
@@ -119,16 +138,17 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
         self.nodeActionsButton.setVisible(False)
         self.nodeDeleteButton.setVisible(False)
         self.nodeDeleteButton.clicked.connect(self._cb_node_delete_clicked)
+        self._setup_nodes_page()
         self.prefsButton.clicked.connect(self._cb_prefs_clicked)
         self.nodePrefsButton.clicked.connect(self._cb_node_prefs_clicked)
         self.fwButton.clicked.connect(lambda: self.open_firewall())
         self.comboAction.currentIndexChanged.connect(self._cb_combo_action_changed)
         self.limitCombo.currentIndexChanged.connect(self._cb_limit_combo_changed)
-        self.tabWidget.currentChanged.connect(self._cb_tab_changed)
-        self.tabWidget.tabCloseRequested.connect(self._cb_tab_closed)
+        self.stackedWidget.currentChanged.connect(self._cb_tab_changed)
         self.delRuleButton.clicked.connect(self._cb_del_rule_clicked)
         self.rulesSplitter.splitterMoved.connect(lambda pos, index: self._cb_splitter_moved( constants.TAB_RULES, pos, index))
         self.nodesSplitter.splitterMoved.connect(lambda pos, index: self._cb_splitter_moved( constants.TAB_NODES, pos, index))
+        self.mainSplitter.splitterMoved.connect(self._cb_sidebar_splitter_moved)
         self.rulesTreePanel.itemClicked.connect(self._cb_rules_tree_item_clicked)
         self.rulesTreePanel.itemDoubleClicked.connect(self._cb_rules_tree_item_double_clicked)
         self.enableRuleCheck.clicked.connect(self._cb_enable_rule_toggled)
@@ -146,7 +166,31 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
         self.nodeRuleLabel.setVisible(False)
         self.comboRulesFilter.setVisible(False)
 
+        self.sidebar.settingsRequested.connect(self._cb_prefs_clicked)
+        self.sidebar.interceptToggled.connect(self._cb_sidebar_intercept_toggled)
+        self.sidebar.nodeSelected.connect(self._cb_sidebar_node_selected)
+
+        self.filterBar.filterChanged.connect(self._cb_filter_bar_changed)
+        self.filterBar.filterCleared.connect(self._cb_filter_bar_cleared)
+        self.filterBar.splitChanged.connect(self._cb_split_changed)
+        self.filterBar.setValueProvider(self.filter_values)
+        self.filterBar.setSplitStatsProvider(self.split_dimension_stats)
+
+        self.detailPanel.closed.connect(self._cb_detail_panel_closed)
+        self.detailPanel.createRuleRequested.connect(self._cb_detail_create_rule)
+
+        self.bulkActionBar.exportRequested.connect(self._cb_bulk_export)
+        self.bulkActionBar.selectAllRequested.connect(self._cb_bulk_select_all)
+        self.bulkActionBar.clearRequested.connect(self._cb_bulk_clear)
+        self.bulkActionBar.createRuleRequested.connect(self._cb_bulk_create_rule)
+        self._shared_rule_fields = {}
+
+        self.frame.setVisible(False)
+        self.navToolBar.setVisible(False)
+
         self.configure_main_btn_menu()
+        QtGui.QShortcut(QtGui.QKeySequence(QtGui.QKeySequence.StandardKey.Quit), self,
+                        activated=lambda: self._on_menu_exit_clicked(False))
 
         self.TABLES[constants.TAB_MAIN]['view'] = self.view_setup(
             self.eventsTable,
@@ -213,7 +257,8 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
         self.TABLES[constants.TAB_HOSTS]['view'] = self.view_setup(
             self.hostsTable,
             self.TABLES[constants.TAB_HOSTS]['name'],
-            model=GenericTableModel(
+            fields=self.TABLES[constants.TAB_HOSTS]['display_fields'],
+            model=AddressTableModel(
                 self.TABLES[constants.TAB_HOSTS]['name'],
                 self.TABLES[constants.TAB_HOSTS]['header_labels']
             ),
@@ -226,7 +271,8 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
         self.TABLES[constants.TAB_PROCS]['view'] = self.view_setup(
             self.procsTable,
             self.TABLES[constants.TAB_PROCS]['name'],
-            model=GenericTableModel(
+            fields=self.TABLES[constants.TAB_PROCS]['display_fields'],
+            model=AddressTableModel(
                 self.TABLES[constants.TAB_PROCS]['name'],
                 self.TABLES[constants.TAB_PROCS]['header_labels']
             ),
@@ -239,6 +285,7 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
         self.TABLES[constants.TAB_ADDRS]['view'] = self.view_setup(
             self.addrTable,
             self.TABLES[constants.TAB_ADDRS]['name'],
+            fields=self.TABLES[constants.TAB_ADDRS]['display_fields'],
             model=AddressTableModel(
                 self.TABLES[constants.TAB_ADDRS]['name'],
                 self.TABLES[constants.TAB_ADDRS]['header_labels']
@@ -252,7 +299,8 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
         self.TABLES[constants.TAB_PORTS]['view'] = self.view_setup(
             self.portsTable,
             self.TABLES[constants.TAB_PORTS]['name'],
-            model=GenericTableModel(
+            fields=self.TABLES[constants.TAB_PORTS]['display_fields'],
+            model=AddressTableModel(
                 self.TABLES[constants.TAB_PORTS]['name'],
                 self.TABLES[constants.TAB_PORTS]['header_labels']
             ),
@@ -265,7 +313,8 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
         self.TABLES[constants.TAB_USERS]['view'] = self.view_setup(
             self.usersTable,
             self.TABLES[constants.TAB_USERS]['name'],
-            model=GenericTableModel(
+            fields=self.TABLES[constants.TAB_USERS]['display_fields'],
+            model=AddressTableModel(
                 self.TABLES[constants.TAB_USERS]['name'],
                 self.TABLES[constants.TAB_USERS]['header_labels']
             ),
@@ -329,10 +378,10 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
         self.TABLES[constants.TAB_MAIN]['view'].setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
         self.TABLES[constants.TAB_MAIN]['view'].customContextMenuRequested.connect(self._cb_table_context_menu)
 
-        self.get_search_widget().setCompleter(self.queries.get_completer(constants.TAB_MAIN))
+        self.filterBar.setCompleter(self.queries.get_completer(constants.TAB_MAIN))
 
         tab_hidden_list = self.cfg.getSettings(Config.STATS_TAB_HIDDEN_LIST)
-        w=self.tabWidget.widget(constants.TAB_MAIN)
+        w=self.stackedWidget.widget(constants.TAB_MAIN)
         if w is not None:
             w.setObjectName(f"{constants.TAB_MAIN}")
         for idx, key in enumerate(self.TABLES):
@@ -340,11 +389,11 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
             if idx == 0:
                 continue
 
-            w=self.tabWidget.widget(idx)
+            w=self.stackedWidget.widget(idx)
             if w is not None:
                 w.setObjectName(f"{key}")
             if tab_hidden_list is not None and str(key) in tab_hidden_list:
-                self.tabWidget.setTabVisible(idx, False)
+                self.sidebar.setItemVisible(idx, False)
                 if key in self.TABLES:
                     self.TABLES[key]['view'].model().suspend()
 
@@ -371,6 +420,14 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
 
         self.TABLES[constants.TAB_FIREWALL]['view'].rowsReordered.connect(self._cb_fw_table_rows_reordered)
 
+        self.eventsTable.setSelectionMode(
+            QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection
+        )
+        self.eventsTable.setSelectionBehavior(
+            QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self._connect_selection_model()
+
         self._load_settings()
 
         self.iconStart = Icons.new(self, "media-playback-start")
@@ -384,8 +441,15 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
             QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Maximum, QtWidgets.QSizePolicy.Policy.Fixed)
         )
         self.fwTreeEdit.clicked.connect(self._cb_tree_edit_firewall_clicked)
+        self.firewallPanel.nodeChanged.connect(self._cb_firewall_node_changed)
         self._configure_buttons_icons()
         self._configure_plugins()
+        for config in self.TABLES.values():
+            view = config.get('view')
+            model = view.model() if view is not None else None
+            if model is not None and hasattr(model, 'rowCountChanged'):
+                model.rowCountChanged.connect(self.update_view_actions)
+        self.update_view_actions()
 
     #Sometimes a maximized window which had been minimized earlier won't unminimize
     #To workaround, we explicitely maximize such windows when unminimizing happens
@@ -400,7 +464,6 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
 
     def show(self):
         super(StatsDialog, self).show()
-        self._fw_dialog = None
         self._prefs_dialog = None
 
         self._shown_trigger.emit()
@@ -460,9 +523,9 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
         if QtGui.QIcon().hasThemeIcon("preferences-desktop") is False:
             self.fwTreeEdit.setText("+")
 
-        self.tabWidget.setTabIcon( constants.TAB_MAIN, eventsIcon)
-        self.tabWidget.setTabIcon( constants.TAB_RULES, rulesIcon)
-        self.tabWidget.setTabIcon( constants.TAB_PROCS, procsIcon)
+        self.sidebar.setItemIcon(constants.TAB_MAIN, eventsIcon)
+        self.sidebar.setItemIcon(constants.TAB_RULES, rulesIcon)
+        self.sidebar.setItemIcon(constants.TAB_PROCS, procsIcon)
         self.newRuleButton.setIcon(newRuleIcon)
         self.delRuleButton.setIcon(delRuleIcon)
         self.editRuleButton.setIcon(editRuleIcon)
@@ -482,13 +545,33 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
             if self.TABLES[idx]['cmdCleanStats'] is not None:
                 self.TABLES[idx]['cmdCleanStats'].setIcon(clearIcon)
 
+    def _make_rules_splitter_timer(self):
+        # a child timer dies with the dialog; a bare singleShot would fire
+        # into a destroyed window
+        self._rules_splitter_timer = QtCore.QTimer(self)
+        self._rules_splitter_timer.setSingleShot(True)
+        self._rules_splitter_timer.timeout.connect(self._ensure_rules_splitter)
+
+    def _ensure_rules_splitter(self):
+        """the rules table must stay visible next to the tree: a saved or
+        early layout can leave it at zero width"""
+        sizes = self.rulesSplitter.sizes()
+        w = sum(sizes) or self.rulesSplitter.width()
+        if w < 100:
+            return
+        tree_w = max(200, min(280, int(w / 5)))
+        table_too_small = len(sizes) < 2 or sizes[1] < 200
+        tree_too_wide = len(sizes) == 2 and sizes[0] > tree_w + 80
+        if table_too_small or (tree_too_wide and not getattr(self, "_rules_splitter_restored", False)):
+            self.rulesSplitter.setSizes([tree_w, w - tree_w])
+
     def _load_settings(self):
         tab_hidden_list = self.cfg.getSettings(Config.STATS_TAB_HIDDEN_LIST)
         if tab_hidden_list is not None:
             for i in tab_hidden_list:
                 tab_idx = self.get_tab_index_by_name(str(i))
                 if tab_idx is not None:
-                    self.tabWidget.setTabVisible(tab_idx, False)
+                    self.sidebar.setItemVisible(tab_idx, False)
                     self.TABLES[int(i)]['view'].model().suspend()
 
         self._ui_refresh_interval = self.cfg.getInt(Config.STATS_REFRESH_INTERVAL, 0)
@@ -506,30 +589,31 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
             self.set_current_tab(int(dialog_last_tab))
         if dialog_general_filter_action is not None:
             self.comboAction.setCurrentIndex(int(dialog_general_filter_action))
+        self.limitCombo.blockSignals(True)
         if dialog_general_limit_results is not None:
-            # XXX: a little hack, because if the saved index is 0, the signal is not fired.
-            # XXX: this causes to fire the event twice
-            self.limitCombo.blockSignals(True)
-            self.limitCombo.setCurrentIndex(4)
             self.limitCombo.setCurrentIndex(int(dialog_general_limit_results))
-            self.limitCombo.blockSignals(False)
+        else:
+            self.limitCombo.setCurrentIndex(len(constants.LIMITS) - 1)
+        self.limitCombo.blockSignals(False)
+        self.update_split_control()
 
         rules_splitter_pos = self.cfg.getSettings(Config.STATS_RULES_SPLITTER_POS)
-        if type(rules_splitter_pos) == QtCore.QByteArray:
+        self.rulesSplitter.setChildrenCollapsible(False)
+        self._rules_splitter_restored = type(rules_splitter_pos) == QtCore.QByteArray
+        if self._rules_splitter_restored:
             self.rulesSplitter.restoreState(rules_splitter_pos)
             rulesSizes = self.rulesSplitter.sizes()
             if self.in_detail_view(constants.TAB_RULES):
                 self.comboRulesFilter.setVisible(False)
             elif len(rulesSizes) > 0:
                 self.comboRulesFilter.setVisible(rulesSizes[0] == 0)
-        else:
-            # default position when the user hasn't moved it yet.
+        self._ensure_rules_splitter()
 
-            # FIXME: The first time show() event is fired, this widget has no
-            # real width yet. The second time is fired the width of the widget
-            # is correct.
-            w = self.rulesSplitter.width()
-            self.rulesSplitter.setSizes([int(w/4), int(w/1)])
+        netstat_interval = self.cfg.getInt(Config.STATS_NETSTAT_INTERVAL, -1)
+        if netstat_interval > 0:
+            self.comboNetstatInterval.blockSignals(True)
+            self.comboNetstatInterval.setCurrentIndex(netstat_interval)
+            self.comboNetstatInterval.blockSignals(False)
 
         nodes_splitter_pos = self.cfg.getSettings(Config.STATS_NODES_SPLITTER_POS)
         if type(nodes_splitter_pos) == QtCore.QByteArray:
@@ -537,6 +621,13 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
         else:
             w = self.nodesSplitter.width()
             self.nodesSplitter.setSizes([w, 0])
+
+        sidebar_splitter_pos = self.cfg.getSettings(Config.STATS_SIDEBAR_SPLITTER_POS)
+        if type(sidebar_splitter_pos) == QtCore.QByteArray:
+            self.mainSplitter.restoreState(sidebar_splitter_pos)
+        else:
+            side = self.sidebar.sizeHint().width()
+            self.mainSplitter.setSizes([side, max(400, self.mainSplitter.width() - side)])
 
         self.netstat.configure_combos()
 
@@ -547,16 +638,8 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
         self.restore_details_view_columns(self.alertsTable.horizontalHeader(), Config.STATS_ALERTS_COL_STATE)
         self.restore_details_view_columns(self.netstatTable.horizontalHeader(), Config.STATS_NETSTAT_COL_STATE)
 
-        rulesTreeNodes_expanded = self.cfg.getBool(Config.STATS_RULES_TREE_EXPANDED_1)
-        if rulesTreeNodes_expanded is not None:
-            rules_tree_nodes = self.get_tree_item(constants.RULES_TREE_NODES)
-            if rules_tree_nodes is not None:
-                rules_tree_nodes.setExpanded(rulesTreeNodes_expanded)
-        rulesTreeApps_expanded = self.cfg.getBool(Config.STATS_RULES_TREE_EXPANDED_0)
-        if rulesTreeApps_expanded is not None:
-            rules_tree_apps = self.get_tree_item(constants.RULES_TREE_APPS)
-            if rules_tree_apps is not None:
-                rules_tree_apps.setExpanded(rulesTreeApps_expanded)
+        # the tree is a flat list of filters now: always fully open
+        self.rulesTreePanel.expandAll()
 
         if dialog_general_filter_text is not None:
             self.set_search_text(dialog_general_filter_text)
@@ -657,12 +740,14 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
                 QtWidgets.QMessageBox.Icon.Warning)
 
     def _cb_tab_closed(self, index):
-        self.tabWidget.setTabVisible(index, False)
+        self.sidebar.setItemVisible(index, False)
+        if self.get_current_view_idx() == index:
+            self.set_current_tab(constants.TAB_MAIN)
         tab_hidden_list = []
         for key in self.TABLES:
             # the key may be an integer
             tab_idx = self.get_tab_index_by_name(str(key))
-            if tab_idx is None or self.tabWidget.isTabVisible(tab_idx):
+            if tab_idx is None or self.sidebar.isItemVisible(tab_idx):
                 continue
 
             tab_hidden_list.append(tab_idx)
@@ -674,11 +759,22 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
         self.cfg.setSettings(Config.STATS_TAB_HIDDEN_LIST, tab_hidden_list)
 
     def _cb_tab_changed(self, index):
-        self.comboAction.setVisible(index == constants.TAB_MAIN)
-        self.get_search_widget().setCompleter(self.queries.get_completer(index))
+        if not hasattr(self, '_view_filters'):
+            self._view_filters = {}
+            self._filter_view = self.LAST_TAB
+        if self._filter_view != index:
+            self._view_filters[self._filter_view] = ([(chip.key, chip.value) for chip in self.filterBar.chips()], self.filterBar.text())
+            pairs, pending = self._view_filters.get(index, ([], ""))
+            self.filterBar.blockSignals(True)
+            self.filterBar.setFilters(pairs)
+            self.filterBar.setFilterText(pending)
+            self.filterBar.blockSignals(False)
+            self.sidebar.setSelectedNodes(self.filterBar.filterValues("node"))
+            self._filter_view = index
+        self.filterBar.setCompleter(self.queries.get_completer(index))
 
         if index != constants.TAB_NETSTAT and self.LAST_TAB == constants.TAB_NETSTAT:
-            self.netstat.unmonitor_node(self.LAST_NETSTAT_NODE)
+            self.netstat.unmonitor_node(None)
 
         if self.LAST_TAB == constants.TAB_NODES and self.LAST_SELECTED_ITEM != "":
             self.node_mon.unmonitor_deselected_node(self.LAST_SELECTED_ITEM)
@@ -686,14 +782,19 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
         if self.TABLES[index]['cmdCleanStats'] is not None:
             self.TABLES[index]['cmdCleanStats'].setVisible(True)
         if index ==  constants.TAB_MAIN:
-            self.queries.set_events_query()
+            self.queries.set_events_query(self.queries.advanced_search(self.filterBar.chipsFilterText()))
         elif index ==  constants.TAB_NETSTAT:
+            if self.comboNetstatInterval.currentIndex() == 0 and self.comboNetstatInterval.count() > 1:
+                # index 0 is "Stop"; an unmonitored Sockets view looks broken
+                self.comboNetstatInterval.setCurrentIndex(self.netstat.default_interval_index())
             self.netstat.monitor_node()
+            self.netstat.apply_filter()
         else:
             if index == constants.TAB_RULES:
                 # display the clean buton only if not in detail view
                 self.TABLES[index]['cmdCleanStats'].setVisible( self.in_detail_view(index) )
                 self._add_rulesTree_nodes()
+                self._rules_splitter_timer.start(0)
 
             elif index == constants.TAB_PROCS:
                 # make the button visible depending if we're in the detail view
@@ -703,7 +804,14 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
             elif index == constants.TAB_NODES:
                 self.TABLES[index]['cmdCleanStats'].setVisible( self.in_detail_view(index) )
 
+            elif index == constants.TAB_FIREWALL:
+                self.firewallPanel.load()
+                self._cb_firewall_node_changed(self.firewallPanel.current_node())
+
         self.LAST_TAB = index
+        self.bulkActionBar.setVisible(index == constants.TAB_MAIN and self.bulkActionBar.count() > 0)
+        self.update_split_control()
+        self.update_view_actions()
         self.refresh_active_table()
 
     def _cb_tab_context_menu(self, pos):
@@ -711,8 +819,12 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
 
     def _cb_table_context_menu(self, pos):
         cur_idx = self.get_current_view_idx()
-        if cur_idx != constants.TAB_RULES and cur_idx != constants.TAB_MAIN:
-            # the only tables with context menu for now are events and rules table
+        if cur_idx in constants.SPLIT_VIEW_KEY and not self.in_detail_view(cur_idx):
+            # the guard only spans the menu itself: the chosen action must be
+            # free to refresh the view
+            self.configure_history_contextual_menu(pos)
+            return
+        if cur_idx not in (constants.TAB_RULES, constants.TAB_MAIN, constants.TAB_FIREWALL):
             return
         if self.in_detail_view(constants.TAB_RULES):
             return
@@ -721,10 +833,10 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
         self.set_context_menu_active(True)
         if cur_idx == constants.TAB_MAIN:
             refresh_table = self.configure_events_contextual_menu(pos)
+        elif cur_idx == constants.TAB_FIREWALL:
+            refresh_table = self.configure_fwrules_contextual_menu(pos)
         elif cur_idx == constants.TAB_RULES:
-            if self.fwTable.isVisible():
-                refresh_table = self.configure_fwrules_contextual_menu(pos)
-            elif self.alertsTable.isVisible():
+            if self.alertsTable.isVisible():
                 refresh_table = self.configure_alerts_contextual_menu(pos)
             else:
                 refresh_table = self.configure_rules_contextual_menu(pos)
@@ -784,7 +896,7 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
         cur_idx = 1
 
         try:
-            self.get_search_widget().setCompleter(self.queries.get_completer(cur_idx))
+            self.filterBar.setCompleter(self.queries.get_completer(cur_idx))
             if idx == constants.COL_NODE:
                 cur_idx = constants.TAB_NODES
                 self.set_in_detail_view(cur_idx, True)
@@ -865,13 +977,32 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
     def _cb_table_clicked(self, idx):
         self.on_table_clicked(idx)
 
+    def _navigate_to_events_filtered(self, filter_text):
+        self.set_current_tab(constants.TAB_MAIN)
+        self.filterLine.setText(str(filter_text))
+        self.queries.set_events_query()
+
     def _cb_table_double_clicked(self, row):
         cur_idx = self.get_current_view_idx()
         if self.in_detail_view(cur_idx):
             return
 
+        if cur_idx in (constants.TAB_HOSTS, constants.TAB_PROCS,
+                       constants.TAB_ADDRS, constants.TAB_PORTS,
+                       constants.TAB_USERS):
+            data = row.model().index(row.row(), constants.COL_WHAT).data()
+            split = self.get_split_by(cur_idx)
+            if split:
+                pairs = [(constants.SPLIT_VIEW_KEY[cur_idx], data)]
+                for i, key in enumerate(split):
+                    pairs.append((key, row.model().index(row.row(), 2 + i).data()))
+                self.filterBar.setFilters(pairs)
+            elif data is not None and str(data).strip() != "":
+                self._navigate_to_events_filtered(data)
+            return
+
         try:
-            if cur_idx == constants.TAB_RULES and self.fwTable.isVisible():
+            if self.fw_view_active(cur_idx):
                 uuid = row.model().index(row.row(), 1).data(QtCore.Qt.ItemDataRole.UserRole.value+1)
                 addr = row.model().index(row.row(), 2).data(QtCore.Qt.ItemDataRole.UserRole.value+1)
                 self.load_fw_rule(addr, uuid)
@@ -886,7 +1017,7 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
             self.set_in_detail_view(cur_idx, True)
             self.set_last_selected_item(row.model().index(row.row(), constants.COL_TIME).data())
             self.LAST_SCROLL_VALUE = self.TABLES[cur_idx]['view'].vScrollBar.value()
-            self.get_search_widget().setCompleter(self.queries.get_completer(cur_idx))
+            self.filterBar.setCompleter(self.queries.get_completer(cur_idx))
 
             data = row.data()
 
@@ -930,7 +1061,7 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
                     data = row.model().index(row.row(), constants.COL_NET_PROC).data()
                     if data == "":
                         return
-                self.netstat.unmonitor_node(self.LAST_NETSTAT_NODE)
+                self.netstat.unmonitor_node(None)
                 self.set_current_tab(cur_idx)
 
             self.set_active_widgets(cur_idx, True, str(data))
@@ -1034,7 +1165,6 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
 
         showFwTable = (parent_row == constants.RULES_TREE_FIREWALL or (parent_row == -1 and item_row == constants.RULES_TREE_FIREWALL))
         showAlertsTable = (parent_row == -1 and item_row == constants.RULES_TREE_ALERTS)
-        self.fwTable.setVisible(showFwTable)
         self.alertsTable.setVisible(showAlertsTable)
         self.alertsScrollBar.setVisible(showAlertsTable)
         self.rulesTable.setVisible(not showFwTable and not showAlertsTable)
@@ -1044,6 +1174,274 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
 
     def _cb_splitter_moved(self, tab, pos, index):
         self.on_splitter_moved(tab, pos, index)
+
+    def _cb_sidebar_intercept_toggled(self):
+        self.startButton.setChecked(not self.startButton.isChecked())
+        self._cb_start_clicked()
+
+    def _cb_sidebar_splitter_moved(self, pos, index):
+        self.cfg.setSettings(Config.STATS_SIDEBAR_SPLITTER_POS, self.mainSplitter.saveState())
+
+    def _update_sidebar_nodes(self):
+        node_data = []
+        nodes = self.node_list()
+        for addr in nodes:
+            hostname = self.node_hostname(addr)
+            online = self._nodes.is_connected(addr)
+            node_data.append((addr, hostname, online is True))
+        self.sidebar.updateNodes(node_data)
+
+    FILTER_COLUMNS = {
+        "dst": "dst_host", "host": "dst_host", "dsthost": "dst_host",
+        "port": "dst_port", "dstport": "dst_port", "srcport": "src_port",
+        "ip": "dst_ip", "dstip": "dst_ip", "srcip": "src_ip",
+        "proto": "protocol", "protocol": "protocol",
+        "action": "action", "process": "process", "proc": "process",
+        "cmd": "process_args", "cmdline": "process_args",
+        "pid": "pid", "uid": "uid", "rule": "rule", "node": "node",
+    }
+
+    def _cb_filter_bar_changed(self, filter_text):
+        self.sidebar.setSelectedNodes(self.filterBar.filterValues("node"))
+        idx = self.get_current_view_idx()
+        try:
+            condition = self.queries.advanced_search(filter_text)
+            if idx == constants.TAB_MAIN:
+                self.queries.set_events_query(condition)
+            elif idx == constants.TAB_NETSTAT:
+                self.netstat.apply_filter(condition)
+            elif idx in constants.SPLIT_VIEW_KEY:
+                self.apply_split(idx)
+            else:
+                self.filterBar.showFilterError("This field filter is not supported on this page.")
+        except FilterError as error:
+            self.filterBar.showFilterError(str(error))
+
+    def _cb_filter_bar_cleared(self):
+        self.sidebar.setSelectedNodes([])
+        self._cb_filter_bar_changed("")
+
+    def _cb_sidebar_node_selected(self, addrs):
+        """the nodes checked in the sidebar: one node chip on the events
+        filter listing them, and the node of the Firewall page (that node
+        when exactly one is checked, all nodes otherwise)"""
+        addrs = list(addrs or [])
+        if addrs:
+            self.filterBar.setFilter("node", ",".join(addrs), emit=False)
+        else:
+            self.filterBar.removeFilter("node", emit=False)
+        addr = addrs[0] if len(addrs) == 1 else ""
+        self.firewallPanel.select_node(addr)
+        if self.get_current_view_idx() == constants.TAB_NETSTAT:
+            self.netstat.monitor_node()
+            self.netstat.apply_filter()
+        if self.get_current_view_idx() == constants.TAB_MAIN:
+            text = self.filterBar.activeFilterText()
+            self.queries.set_events_query(self.queries.advanced_search(text) if text else None)
+
+    FILTER_VALUES_LIMIT = 50
+
+    def filter_values(self, key, prefix=""):
+        """distinct values of the column behind a filter key, among the
+        connections the applied chips leave, starting with `prefix`
+        (case does not matter), for the filter box to offer"""
+        field = self.filterBar.FIELD_MAP.get(key)
+        column = self.queries.filter_columns().get(key)
+        table = "sockets" if self.get_current_view_idx() == constants.TAB_NETSTAT else "connections"
+        if column is None:
+            return []
+        try:
+            where = self.queries.advanced_search(self.filterBar.chipsFilterText()) or ""
+        except FilterError:
+            return []
+        if where and key in self.filterBar.MULTI_KEYS:
+            where = ""  # the node chip is what is being changed
+        clauses = [f"{column} != ''"]
+        if where:
+            clauses.append("(" + where + ")")
+        if prefix:
+            clauses.append(f"{column} LIKE ? ESCAPE '\\'")
+        qstr = (f"SELECT DISTINCT {column} FROM {table} as c WHERE " + " AND ".join(clauses)
+                + f" ORDER BY {column} LIMIT {self.FILTER_VALUES_LIMIT}")
+        q = QtSql.QSqlQuery(self._db_sqlite)
+        q.prepare(qstr)
+        if prefix:
+            escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            q.bindValue(0, escaped + "%")
+        values = []
+        if q.exec():
+            while q.next():
+                v = q.value(0)
+                if v is not None and str(v) != "":
+                    values.append(str(v))
+        q.finish()
+        return values
+
+    def select_anchor(self, idx, anchor):
+        """select the row whose key is `anchor` among the rows on screen. The
+        table keeps its own selection (values of the tracking column) and
+        re-applies it after every refresh, so that is what is set."""
+        view = self.TABLES[idx]['view']
+        model = view.model()
+        for r in range(model.rowCount()):
+            if str(model.index(r, 0).data()) == anchor:
+                view._rows_selection = {model.index(r, view.trackingCol).data()}
+                view.selectIndices()
+                view.selectionModel().setCurrentIndex(
+                    model.index(r, 0), QtCore.QItemSelectionModel.SelectionFlag.NoUpdate)
+                view.viewport().update()
+                return r
+        return None
+
+    def _cb_split_changed(self, split, enrich):
+        cur_idx = self.get_current_view_idx()
+        if cur_idx not in constants.SPLIT_VIEW_KEY or self.in_detail_view(cur_idx):
+            return
+        view = self.TABLES[cur_idx]['view']
+        # keep the sort and the row the person is looking at across the change
+        anchor = self.view_anchor(cur_idx)
+        self.set_split_by(cur_idx, split)
+        if self.filterBar.hasEnrichOptions():
+            self.set_enrichment(cur_idx, enrich)
+        self.update_split_control()
+        self.clamp_view_order(cur_idx)
+        self.sync_split_model(cur_idx)
+        position = self.offset_of_key(
+            view.model(), self.queries.get_view_query(view.model(), cur_idx), anchor)
+        view.clearSelection()
+        # the anchor row lands in the middle of the viewport and stays selected
+        rows = view.maxRowsInViewport or 0
+        if rows <= 0:
+            view.calculateRowsInViewport()
+            rows = view.maxRowsInViewport or 0
+        offset = max(0, position - rows // 2) if position is not None else 0
+        self.apply_split(cur_idx, offset=offset)
+        if position is not None:
+            QtCore.QTimer.singleShot(0, lambda: self.select_anchor(cur_idx, anchor))
+        for col in range(view.model().columnCount()):
+            view.setColumnHidden(col, False)
+        view.resizeColumnsToContents()
+        view.refresh()
+        if position is not None:
+            self.select_anchor(cur_idx, anchor)
+
+    def _connect_selection_model(self):
+        self.eventsTable.selectionUpdated.connect(self._cb_events_selection_updated)
+
+    def _cb_detail_panel_closed(self):
+        self.eventsTable.clearSelection()
+
+    def _cb_detail_create_rule(self, data):
+        """the rule editor, filled in from the selected connection"""
+        coltime = (data or {}).get("time")
+        if coltime and self._rules_dialog.new_rule_from_connection(coltime) is not False:
+            return
+        self._cb_new_rule_clicked()
+
+    # (column, rule editor field) in the order the caption lists them
+    SHARED_RULE_FIELDS = (
+        (constants.COL_PROCS, "process"),
+        (constants.COL_DSTHOST, "dst_host"),
+        (constants.COL_DSTIP, "dst_ip"),
+        (constants.COL_DSTPORT, "dst_port"),
+        (constants.COL_PROTO, "protocol"),
+        (constants.COL_UID, "uid"),
+        (constants.COL_NODE, "node"),
+    )
+
+    def shared_selection_fields(self):
+        """{field: value} for every column that has one value across the
+        selected connections; {} with fewer than two rows"""
+        rows = self.eventsTable.selectedRows() or []
+        if len(rows) < 2:
+            return {}
+        shared = {}
+        for col, field in self.SHARED_RULE_FIELDS:
+            values = set(str(r[col]) if col < len(r) and r[col] is not None else "" for r in rows)
+            if len(values) == 1:
+                value = values.pop()
+                if value != "":
+                    shared[field] = value
+        return shared
+
+    def _cb_bulk_create_rule(self):
+        """one row: the editor filled in from that connection; several: the
+        editor filled in with only what they share"""
+        shared = {k: v for k, v in getattr(self, "_shared_rule_fields", {}).items() if k != "node"}
+        if shared:
+            node = self._shared_rule_fields.get("node")
+            if self._rules_dialog.new_rule_from_shared(shared, node) is not False:
+                return
+        self._cb_detail_create_rule(self.detailPanel.currentData())
+
+    def _cb_events_selection_updated(self, count):
+        self.bulkActionBar.updateCount(count)
+        self._shared_rule_fields = self.shared_selection_fields() if count >= 2 else {}
+        rule_fields = [("port " + str(v)) if k == "dst_port" else v for k, v in self._shared_rule_fields.items() if k != "node"]
+        self.bulkActionBar.setCreateRuleEnabled(count == 1 or bool(rule_fields))
+        self.bulkActionBar.setCreateRuleCaption(rule_fields)
+        if count == 1:
+            cur = self.eventsTable.selectionModel().currentIndex()
+            if cur.isValid():
+                self._show_detail_for_row(cur.row())
+        else:
+            self.detailPanel.hideDetail()
+
+    def _show_detail_for_row(self, row):
+        model = self.eventsTable.model()
+        data = {
+            "time": model.index(row, constants.COL_TIME).data(),
+            "action": model.index(row, constants.COL_ACTION).data(),
+            "protocol": model.index(row, constants.COL_PROTO).data(),
+            "process": model.index(row, constants.COL_PROCS).data(),
+            "cmdline": model.index(row, constants.COL_CMDLINE).data(),
+            "pid": model.index(row, constants.COL_PID).data(),
+            "uid": model.index(row, constants.COL_UID).data(),
+            "src_ip": model.index(row, constants.COL_SRCIP).data(),
+            "src_port": model.index(row, constants.COL_SRCPORT).data(),
+            "dst_ip": model.index(row, constants.COL_DSTIP).data(),
+            "dst_host": model.index(row, constants.COL_DSTHOST).data(),
+            "dst_port": model.index(row, constants.COL_DSTPORT).data(),
+            "node": model.index(row, constants.COL_NODE).data(),
+            "rule": model.index(row, constants.COL_RULES).data(),
+        }
+        self.detailPanel.showConnection(data)
+
+    def _cb_bulk_export(self):
+        selected = self.eventsTable.selectedRows()
+        if not selected:
+            return
+
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            QC.translate("stats", "Export selected connections"),
+            "",
+            QC.translate("stats", "CSV files (*.csv)")
+        )
+        if not path:
+            return
+
+        model = self.eventsTable.model()
+        cols = model.columnCount()
+        with open(path, "w") as f:
+            headers = []
+            for c in range(cols):
+                headers.append(str(model.headerData(c, QtCore.Qt.Orientation.Horizontal, QtCore.Qt.ItemDataRole.DisplayRole) or ""))
+            f.write(",".join(headers) + "\n")
+            for row in selected:
+                row_data = []
+                for c in range(cols):
+                    val = row[c] if c < len(row) else ""
+                    row_data.append(str(val or "").replace(",", ";"))
+                f.write(",".join(row_data) + "\n")
+
+    def _cb_bulk_select_all(self):
+        self.eventsTable.selectAll()
+
+    def _cb_bulk_clear(self):
+        self.eventsTable.clearSelection()
+        self.bulkActionBar.updateCount(0)
+        self.detailPanel.hideDetail()
 
     def _cb_start_clicked(self):
         if self.daemon_connected is False:
@@ -1086,6 +1484,72 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
 
     def _cb_node_delete_clicked(self):
         self.view_delete_node()
+
+    def _setup_nodes_page(self):
+        """a line on top saying what the page lists, and a way to drop a
+        node that no longer connects"""
+        self.nodesDescription = QtWidgets.QLabel(QC.translate(
+            "stats", "Every daemon that has connected to this interface, with its version and settings."))
+        self.nodesDescription.setObjectName("nodesDescription")
+        self.nodesDescription.setWordWrap(True)
+        self.nodesDescription.setStyleSheet("color: palette(placeholder-text); padding: 2px 4px;")
+        self.nodesDescription.setToolTip(QC.translate(
+            "stats", "Double-click a node for its connections. Right-click an offline node to forget it."))
+        layout = self.nodesSplitter.parentWidget().layout()
+        toolbar = None
+        for i in range(layout.count()):
+            item = layout.itemAt(i)
+            if item.layout() is not None and item.layout().indexOf(self.cmdNodesBack) != -1:
+                toolbar = item.layout()
+        if toolbar is not None:
+            toolbar.insertWidget(toolbar.indexOf(self.cmdNodesBack) + 1, self.nodesDescription, 1)
+        self.nodesTable.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
+        self.nodesTable.customContextMenuRequested.connect(self._cb_nodes_table_context_menu)
+
+    def _node_row_at(self, pos):
+        index = self.nodesTable.indexAt(pos)
+        if not index.isValid():
+            return None, None
+        model = self.nodesTable.model()
+        addr = model.index(index.row(), constants.COL_NODE).data()
+        hostname = model.index(index.row(), constants.COL_N_HOSTNAME).data()
+        return addr, hostname
+
+    def _cb_nodes_table_context_menu(self, pos):
+        if self.in_detail_view(constants.TAB_NODES):
+            return
+        addr, hostname = self._node_row_at(pos)
+        if not addr:
+            return
+        online = self._nodes.is_connected(addr) is True
+        menu = QtWidgets.QMenu(self.nodesTable)
+        forget = menu.addAction(QC.translate("stats", "Forget node {0}").format(hostname or addr))
+        forget.setToolTip(QC.translate(
+            "stats", "Removes this node and its connections from this interface. It comes back if its daemon connects again."))
+        forget.setEnabled(not online)
+        if online:
+            forget.setText(QC.translate("stats", "Forget node (it is connected)"))
+        forget.triggered.connect(lambda checked=False, a=addr, h=hostname: self.forget_node(a, h))
+        menu.exec(self.nodesTable.viewport().mapToGlobal(pos))
+
+    def forget_node(self, addr, hostname=""):
+        """drop a node the daemon of which no longer connects, after asking"""
+        if self._nodes.is_connected(addr) is True:
+            return False
+        name = hostname or self.node_hostname(addr) or addr
+        ret = Message.yes_no(
+            QC.translate("stats", "Forget node {0}?").format(name),
+            QC.translate("stats", "Its row and its connections are removed from this interface. "
+                                  "Nothing changes on the machine itself."),
+            QtWidgets.QMessageBox.Icon.Question)
+        if ret != QtWidgets.QMessageBox.StandardButton.Yes:
+            return False
+        self._db.remove("DELETE FROM nodes WHERE addr = ?", [addr])
+        self._db.remove("DELETE FROM connections WHERE node = ?", [addr])
+        self.node_delete(addr)
+        self._update_sidebar_nodes()
+        self.refresh_active_table()
+        return True
 
     def _cb_new_rule_clicked(self):
         self._rules_dialog.new_rule()
@@ -1144,20 +1608,20 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
         )
 
     def open_firewall(self):
-        if self._fw_dialog is None:
-            self._fw_dialog = FirewallDialog(appicon=self.appicon)
-        self._fw_dialog.show()
-
+        self.set_current_tab(constants.TAB_FIREWALL)
 
     def new_fw_rule(self):
-        if self._fw_dialog is None:
-            self._fw_dialog = FirewallDialog(appicon=self.appicon)
-        self._fw_dialog.new_rule()
+        self.firewallPanel.new_rule()
 
     def load_fw_rule(self, node, uuid):
-        if self._fw_dialog is None:
-            self._fw_dialog = FirewallDialog(appicon=self.appicon)
-        self._fw_dialog.load_rule(node, uuid)
+        self.firewallPanel.load_rule(node, uuid)
+
+    def _cb_firewall_node_changed(self, addr):
+        view = self.TABLES[constants.TAB_FIREWALL]['view']
+        if addr == self.firewallPanel.ALL_NODES:
+            view.filterAll()
+        else:
+            view.filterByNode(addr)
 
     def open_settings(self, addr=None):
         if self._prefs_dialog is None:
@@ -1247,11 +1711,13 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
     def _update_status_label(self, running=False, text=FIREWALL_DISABLED):
         self.statusLabel.setText("%12s" % text)
         if running:
-            self.statusLabel.setStyleSheet('color: green; margin: 5px')
+            self.statusLabel.setStyleSheet('color: %s; margin: 5px' % Themes.ok_color())
             self.startButton.setIcon(self.iconPause)
         else:
-            self.statusLabel.setStyleSheet('color: rgb(206, 92, 0); margin: 5px')
+            self.statusLabel.setStyleSheet('color: %s; margin: 5px' % Themes.warn_color())
             self.startButton.setIcon(self.iconStart)
+
+        self.sidebar.updateShield(running)
 
         self._add_rulesTree_nodes()
         self._add_rulesTree_fw_chains()
@@ -1266,12 +1732,15 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
             hostname = self.node_hostname(n)
             labels+=((n, hostname),)
         self.add_tree_items(constants.RULES_TREE_NODES, labels)
+        self.rulesTreePanel.expandAll()
 
     def _add_rulesTree_fw_chains(self):
         expanded = list()
         selected = None
         scrollValue = self.rulesTreePanel.verticalScrollBar().value()
         fwItem = self.rulesTreePanel.topLevelItem(constants.RULES_TREE_FIREWALL)
+        # system rules have their own page now
+        fwItem.setHidden(True)
         selected, expanded = self.get_tree_selected_items(constants.RULES_TREE_FIREWALL)
 
         self.rulesTreePanel.setAnimated(False)
@@ -1370,15 +1839,30 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
         nodes = self.nodes_count()
         self.daemonVerLabel.setText(self._stats.daemon_version)
         if nodes <= 1:
-            self.uptimeLabel.setText(str(datetime.timedelta(seconds=self._stats.uptime)))
+            uptime_str = str(datetime.timedelta(seconds=self._stats.uptime))
+            self.uptimeLabel.setText(uptime_str)
             self.rulesLabel.setText("%s" % self._stats.rules)
             self.consLabel.setText("%s" % self._stats.connections)
             self.droppedLabel.setText("%s" % self._stats.dropped)
+            self.sidebar.updateShield(
+                self.startButton.isChecked(),
+                uptime_str + " uptime"
+            )
+            self.statusLine.set(
+                connections="{:,}".format(self._stats.connections).replace(",", " "),
+                dropped="{:,}".format(self._stats.dropped).replace(",", " "),
+                uptime=uptime_str,
+                rules=self._stats.rules,
+                version=self._stats.daemon_version,
+            )
         else:
             self.uptimeLabel.setText("")
             self.rulesLabel.setText("")
             self.consLabel.setText("")
             self.droppedLabel.setText("")
+            self.statusLine.set(nodes=nodes, version=self._stats.daemon_version)
+
+        self._update_sidebar_nodes()
 
         if need_query_update and not self.are_rows_selected():
             self.refresh_active_table()
@@ -1392,40 +1876,49 @@ class StatsDialog(menus.MenusManager, menu_actions.MenuActions, views.ViewsManag
             self._prefs_dialog.deleteLater()
             self._prefs_dialog = None
             del self._prefs_dialog
-        if self._fw_dialog is not None:
-            self._fw_dialog.deleteLater()
-            self._fw_dialog = None
-            del self._fw_dialog
 
         self.asndb.unload()
+        GeoDB.instance().unload()
 
-        self._save_settings()
         e.accept()
         self.hide()
 
     def hideEvent(self, e):
         self._save_settings()
+        self.cfg.flush()
 
     def keyPressEvent(self, event):
         if event.matches(QtGui.QKeySequence.StandardKey.NextChild):
-            for i in range(self.tabWidget.currentIndex()+1, self.tabWidget.count()):
-                next_idx = i % self.tabWidget.count()
-                if not self.tabWidget.isTabVisible(next_idx):
+            for i in range(self.stackedWidget.currentIndex()+1, self.stackedWidget.count()):
+                next_idx = i % self.stackedWidget.count()
+                if not self.sidebar.isItemVisible(next_idx):
                     continue
-                self.tabWidget.setCurrentIndex(next_idx)
+                self.set_current_tab(next_idx)
                 event.accept()
                 break
         if event.matches(QtGui.QKeySequence.StandardKey.PreviousChild):
-            for i in reversed(range(self.tabWidget.currentIndex())):
-                prev_idx = i % self.tabWidget.count()
-                if not self.tabWidget.isTabVisible(prev_idx):
+            for i in reversed(range(self.stackedWidget.currentIndex())):
+                prev_idx = i % self.stackedWidget.count()
+                if not self.sidebar.isItemVisible(prev_idx):
                     continue
-                self.tabWidget.setCurrentIndex(prev_idx)
+                self.set_current_tab(prev_idx)
                 event.accept()
                 break
 
         if event.matches(QtGui.QKeySequence.StandardKey.Find) or event.key() == QtCore.Qt.Key.Key_Slash:
-            self.get_search_widget().setFocus()
-        # https://gis.stackexchange.com/questions/86398/how-to-disable-the-escape-key-for-a-dialog
+            self.filterBar.focusInput()
+            return
+        if event.key() == QtCore.Qt.Key.Key_Escape:
+            if self.detailPanel.isVisible():
+                self.detailPanel.hideDetail()
+                self.detailPanel.closed.emit()
+                return
+            if self.bulkActionBar.isVisible():
+                self._cb_bulk_clear()
+                return
+        if event.matches(QtGui.QKeySequence.StandardKey.SelectAll):
+            if self.get_current_view_idx() == constants.TAB_MAIN:
+                self._cb_bulk_select_all()
+                return
         if not event.key() == QtCore.Qt.Key.Key_Escape:
             super(StatsDialog, self).keyPressEvent(event)

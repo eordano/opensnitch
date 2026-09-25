@@ -56,7 +56,7 @@ class Rules(QObject):
         """
         node = self._nodes.get_node(addr)
         if node is None or not 'firewall' in node:
-            return False, QC.translate("firewall", "this node doesn't have a firewall configuration, review it.")
+            return False, QC.translate("firewall", "this node does not have a firewall configuration, review it.")
         if self.is_duplicated(addr, rule):
             return False, QC.translate("firewall", "duplicated")
 
@@ -84,7 +84,7 @@ class Rules(QObject):
     def update(self, addr, uuid, rule):
         node = self._nodes.get_node(addr)
         if node is None or not 'firewall' in node:
-            return False, QC.translate("firewall", "this node doesn't have a firewall configuration, review it.")
+            return False, QC.translate("firewall", "this node does not have a firewall configuration, review it.")
         for sdx, n in enumerate(node['firewall'].SystemRules):
             for cdx, c in enumerate(n.Chains):
                 for rdx, r in enumerate(c.Rules):

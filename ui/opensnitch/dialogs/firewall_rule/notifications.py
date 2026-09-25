@@ -53,7 +53,7 @@ def handle(win, addr, reply):
                         win,
                         QC.translate(
                             "firewall",
-                            "Rule saved, but there're other rules with errors (REVIEW):\n{0}".format(reply.data)
+                            "Rule saved, but there are other rules with errors (REVIEW):\n{0}".format(reply.data)
                         )
                     )
                     return

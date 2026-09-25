@@ -16,7 +16,6 @@ ALL_NODES="all"
 class MenusManager(views.ViewsManager):
     def __init__(self, parent):
         super().__init__(parent)
-        self._editing_tabs = False
 
     def configure_main_btn_menu(self):
         menu = QtWidgets.QMenu(self)
@@ -65,7 +64,7 @@ class MenusManager(views.ViewsManager):
 
         menu = QtWidgets.QMenu(self)
 
-        if cur_idx == constants.TAB_RULES and self.fwTable.isVisible():
+        if self.fw_view_active(cur_idx):
             cur_idx = constants.TAB_FIREWALL
             # TODO: handle properly the hidden columns, for example when the
             # user selects a fw chain that displays the up/down buttons column.
@@ -89,8 +88,7 @@ class MenusManager(views.ViewsManager):
                 haction.setChecked(str(i) in cols or cols_len == 0)
             headers_sel.append(haction)
 
-        point = QtCore.QPoint(pos.x()+10, pos.y()+5)
-        action = menu.exec(table.mapToGlobal(point))
+        action = menu.exec(QtGui.QCursor.pos())
         new_cols = []
         for i, h in enumerate(headers_sel):
             if not h.isVisible():
@@ -120,8 +118,7 @@ class MenusManager(views.ViewsManager):
             self.set_view_context_menu(constants.TAB_MAIN, menu)
 
             # move away menu a few pixels to the right, to avoid clicking on it by mistake
-            point = QtCore.QPoint(pos.x()+10, pos.y()+5)
-            action = menu.exec(table.mapToGlobal(point))
+            action = menu.exec(QtGui.QCursor.pos())
 
             model = table.model()
 
@@ -196,8 +193,7 @@ class MenusManager(views.ViewsManager):
             self.set_view_context_menu(constants.TAB_FIREWALL, menu)
 
             # move away menu a few pixels to the right, to avoid clicking on it by mistake
-            point = QtCore.QPoint(pos.x()+10, pos.y()+5)
-            action = menu.exec(table.mapToGlobal(point))
+            action = menu.exec(QtGui.QCursor.pos())
 
             model = table.model()
 
@@ -247,128 +243,177 @@ class MenusManager(views.ViewsManager):
             self.clear_rows_selection()
             return True
 
+    # the daemon's "deny" is a drop: the packet is discarded without an answer
+    ACTION_WORDS = (
+        ("allow", Config.ACTION_ALLOW),
+        ("drop", Config.ACTION_DENY),
+        ("reject", Config.ACTION_REJECT),
+    )
+
+    def build_rules_menu(self, selection):
+        """the menu of the rules table: every entry names what it does.
+        Returns (menu, handlers) where handlers maps QAction -> callable(model)."""
+        menu = QtWidgets.QMenu()
+        handlers = {}
+        cur_idx = self.get_current_view_idx()
+        current_action = ""
+        current_duration = ""
+        is_rule_enabled = "True"
+        if selection:
+            is_rule_enabled = str(selection[0][constants.COL_R_ENABLED])
+            if len(selection) == 1:
+                current_action = str(selection[0][constants.COL_R_ACTION]).lower()
+                current_duration = str(selection[0][constants.COL_R_DURATION])
+
+        if self.nodes_count() > 1:
+            nodesMenu = menu.addMenu(QC.translate("stats", "Apply to node"))
+            act = nodesMenu.addAction(QC.translate("stats", "All nodes"))
+            handlers[act] = lambda model, addr=ALL_NODES: self._rules_menu_apply_to(cur_idx, model, selection, addr)
+            for node in self.node_list():
+                act = nodesMenu.addAction(self.node_hostname(node) or node)
+                handlers[act] = lambda model, addr=node: self._rules_menu_apply_to(cur_idx, model, selection, addr)
+
+        for word, value in self.ACTION_WORDS:
+            if value == current_action:
+                continue
+            act = menu.addAction(QC.translate("stats", "Change action to {0}").format(QC.translate("stats", word)))
+            handlers[act] = lambda model, v=value: self.table_menu_change_rule_field(cur_idx, model, selection, "action", v)
+
+        durMenu = menu.addMenu(QC.translate("stats", "Change expiration"))
+        for label, value in (
+            (QC.translate("stats", "Never (always)"), Config.DURATION_ALWAYS),
+            (QC.translate("stats", "Until reboot"), Config.DURATION_UNTIL_RESTART),
+            (Config.DURATION_12h, Config.DURATION_12h),
+            (Config.DURATION_1h, Config.DURATION_1h),
+            (Config.DURATION_30m, Config.DURATION_30m),
+            (Config.DURATION_15m, Config.DURATION_15m),
+            (Config.DURATION_5m, Config.DURATION_5m),
+        ):
+            act = durMenu.addAction(label)
+            if value == current_duration:
+                act.setEnabled(False)
+                act.setToolTip(QC.translate("stats", "The rule already expires this way."))
+            handlers[act] = lambda model, v=value: self.table_menu_change_rule_field(cur_idx, model, selection, "duration", v)
+        menu.addSeparator()
+
+        if is_rule_enabled == "False":
+            act = menu.addAction(Icons.new(self, "media-playback-start"), QC.translate("stats", "Enable rule"))
+        else:
+            act = menu.addAction(Icons.new(self, "media-playback-pause"), QC.translate("stats", "Disable rule"))
+        handlers[act] = lambda model: self.table_menu_enable(cur_idx, model, selection, is_rule_enabled)
+
+        act = menu.addAction(QC.translate("stats", "Duplicate"))
+        handlers[act] = lambda model: self.table_menu_duplicate(cur_idx, model, selection)
+        act = menu.addAction(Icons.new(self, "document-edit"), QC.translate("stats", "Edit"))
+        handlers[act] = lambda model: self.table_menu_edit(cur_idx, model, selection)
+        delete_icon = QtGui.QIcon.fromTheme("edit-delete-remove")
+        if delete_icon.isNull():
+            delete_icon = Icons.new(self, "dialog-cancel")
+        act = menu.addAction(delete_icon, QC.translate("stats", "Delete"))
+        handlers[act] = lambda model: self.table_menu_delete(cur_idx, model, selection)
+
+        menu.addSeparator()
+        act = menu.addAction(Icons.new(self, "edit-copy"), QC.translate("stats", "Copy"))
+        handlers[act] = lambda model: self.table_menu_export_clipboard(cur_idx, model, selection)
+        act = menu.addAction(Icons.new(self, "document-save-as"), QC.translate("stats", "Save as..."))
+        handlers[act] = lambda model: self.table_menu_export_disk(cur_idx, model, selection)
+        return menu, handlers
+
+    def _rules_menu_apply_to(self, cur_idx, model, selection, node_addr):
+        ret = Message.yes_no(
+            QC.translate("stats", "Apply this rule to {0}?").format(
+                QC.translate("stats", "all nodes") if node_addr == ALL_NODES else node_addr),
+            QC.translate("stats", "Are you sure?"),
+            QtWidgets.QMessageBox.Icon.Warning)
+        if ret == QtWidgets.QMessageBox.StandardButton.Cancel:
+            return
+        if node_addr == ALL_NODES:
+            self.table_menu_apply_to_all_nodes(cur_idx, model, selection, node_addr)
+        else:
+            self.table_menu_apply_to_node(cur_idx, model, selection, node_addr)
+
     def configure_rules_contextual_menu(self, pos):
         try:
-            cur_idx = self.get_current_view_idx()
             table = self.get_active_table()
-            model = table.model()
-
             selection = table.selectedRows()
-
-            menu = QtWidgets.QMenu()
-            durMenu = QtWidgets.QMenu(self.COL_STR_DURATION)
-            actionMenu = QtWidgets.QMenu(self.COL_STR_ACTION)
-            nodesMenu = QtWidgets.QMenu(QC.translate("stats", "Apply to"))
-            exportMenu = QtWidgets.QMenu(QC.translate("stats", "Export"))
-
-            nodes_menu = []
-            if self.nodes_count() > 1:
-                nodes_menu.append(
-                    [
-                        nodesMenu.addAction(QC.translate("stats", "All")),
-                        ALL_NODES
-                    ])
-                for node in self.node_list():
-                    nodes_menu.append([nodesMenu.addAction(node), node])
-                menu.addMenu(nodesMenu)
-
-            _actAllow = actionMenu.addAction(QC.translate("stats", "Allow"))
-            _actDrop = actionMenu.addAction(QC.translate("stats", "Drop"))
-            _actReject = actionMenu.addAction(QC.translate("stats", "Reject"))
-            menu.addMenu(actionMenu)
-
-            _durAlways = durMenu.addAction(QC.translate("stats", "Always"))
-            _durUntilReboot = durMenu.addAction(QC.translate("stats", "Until reboot"))
-            _dur12h = durMenu.addAction(Config.DURATION_12h)
-            _dur1h = durMenu.addAction(Config.DURATION_1h)
-            _dur30m = durMenu.addAction(Config.DURATION_30m)
-            _dur15m = durMenu.addAction(Config.DURATION_15m)
-            _dur5m = durMenu.addAction(Config.DURATION_5m)
-            menu.addMenu(durMenu)
-
-            is_rule_enabled = True
-            _menu_enable = None
-            # if there's more than one rule selected, we choose an action
-            # based on the status of the first rule.
-            if selection and len(selection) > 0:
-                is_rule_enabled = selection[0][constants.COL_R_ENABLED]
-                menu_label_enable = QC.translate("stats", "Disable")
-                if is_rule_enabled == "False":
-                    menu_label_enable = QC.translate("stats", "Enable")
-
-                _menu_enable = menu.addAction(QC.translate("stats", menu_label_enable))
-
-            _menu_duplicate = menu.addAction(QC.translate("stats", "Duplicate"))
-            _menu_edit = menu.addAction(QC.translate("stats", "Edit"))
-            _menu_delete = menu.addAction(QC.translate("stats", "Delete"))
-
-            menu.addSeparator()
-            _toClipboard = exportMenu.addAction(QC.translate("stats", "To clipboard"))
-            _toDisk = exportMenu.addAction(QC.translate("stats", "To disk"))
-            menu.addMenu(exportMenu)
+            if not selection:
+                return False
+            menu, handlers = self.build_rules_menu(selection)
             self.set_view_context_menu(constants.TAB_RULES, menu)
-
-            # move away menu a few pixels to the right, to avoid clicking on it by mistake
-            point = QtCore.QPoint(pos.x()+10, pos.y()+5)
-            action = menu.exec(table.mapToGlobal(point))
-
-            model = table.model()
-
-            if self.nodes_count() > 1:
-                for nmenu in nodes_menu:
-                    node_action = nmenu[0]
-                    node_addr = nmenu[1]
-                    if action == node_action:
-                        ret = Message.yes_no(
-                            QC.translate("stats", "    Apply this rule to {0}  ".format(node_addr)),
-                            QC.translate("stats", "    Are you sure?"),
-                            QtWidgets.QMessageBox.Icon.Warning)
-                        if ret == QtWidgets.QMessageBox.StandardButton.Cancel:
-                            return False
-                        if node_addr == ALL_NODES:
-                            self.table_menu_apply_to_all_nodes(cur_idx, model, selection, node_addr)
-                        else:
-                            self.table_menu_apply_to_node(cur_idx, model, selection, node_addr)
-                        return False
-
-            if action == _menu_delete:
-                self.table_menu_delete(cur_idx, model, selection)
-            elif action == _menu_edit:
-                self.table_menu_edit(cur_idx, model, selection)
-            elif action == _menu_enable:
-                self.table_menu_enable(cur_idx, model, selection, is_rule_enabled)
-            elif action == _menu_duplicate:
-                self.table_menu_duplicate(cur_idx, model, selection)
-            elif action == _durAlways:
-                self.table_menu_change_rule_field(cur_idx, model, selection, "duration", Config.DURATION_ALWAYS)
-            elif action == _dur12h:
-                self.table_menu_change_rule_field(cur_idx, model, selection, "duration", Config.DURATION_12h)
-            elif action == _dur1h:
-                self.table_menu_change_rule_field(cur_idx, model, selection, "duration", Config.DURATION_1h)
-            elif action == _dur30m:
-                self.table_menu_change_rule_field(cur_idx, model, selection, "duration", Config.DURATION_30m)
-            elif action == _dur15m:
-                self.table_menu_change_rule_field(cur_idx, model, selection, "duration", Config.DURATION_15m)
-            elif action == _dur5m:
-                self.table_menu_change_rule_field(cur_idx, model, selection, "duration", Config.DURATION_5m)
-            elif action == _durUntilReboot:
-                self.table_menu_change_rule_field(cur_idx, model, selection, "duration", Config.DURATION_UNTIL_RESTART)
-            elif action == _actAllow:
-                self.table_menu_change_rule_field(cur_idx, model, selection, "action", Config.ACTION_ALLOW)
-            elif action == _actDrop:
-                # TODO: use ACTION_DROP when 'drop' is added to the daemon
-                self.table_menu_change_rule_field(cur_idx, model, selection, "action", Config.ACTION_DENY)
-            elif action == _actReject:
-                self.table_menu_change_rule_field(cur_idx, model, selection, "action", Config.ACTION_REJECT)
-            elif action == _toClipboard:
-                self.table_menu_export_clipboard(cur_idx, model, selection)
-            elif action == _toDisk:
-                self.table_menu_export_disk(cur_idx, model, selection)
-
+            action = menu.exec(QtGui.QCursor.pos())
+            handler = handlers.get(action)
+            if handler is not None:
+                handler(table.model())
         except Exception as e:
             print("rules contextual menu exception:", e)
         finally:
             return True
+
+    def build_history_menu(self, idx, row):
+        """the menu of a summary row (Hosts, Processes, Addresses, Ports,
+        Users): filter here, open the events, drill down, copy, export"""
+        menu = QtWidgets.QMenu()
+        handlers = {}
+        view = self.TABLES[idx]['view']
+        model = view.model()
+        key = constants.SPLIT_VIEW_KEY[idx]
+        labels = {k: QC.translate("stats", label) for k, label, _ in constants.SPLIT_DIMENSIONS}
+        value = model.index(row, 0).data()
+        pairs = [(key, value)]
+        for i, k in enumerate(self.get_split_by(idx)):
+            pairs.append((k, model.index(row, 2 + i).data()))
+        described = " ".join("{0} {1}".format(labels.get(k, k), v) for k, v in pairs if v not in (None, ""))
+
+        act = menu.addAction(Icons.new(self, "view-list-details"), QC.translate("stats", "Show events for {0}").format(described))
+        def _events(pairs=pairs):
+            self.set_current_tab(constants.TAB_MAIN)
+            self.filterBar.setFilters(pairs)
+        handlers[act] = _events
+
+        drill = menu.addMenu(QC.translate("stats", "Drill down by"))
+        stats = self.split_dimension_stats(pairs)
+        for k, action in self.filterBar._split_actions.items():
+            label = self.filterBar.splitLabels().get(k, action.text())
+            text, enabled = self.filterBar.describe_split_choice(label, action.isChecked(), stats.get(k))
+            item = drill.addAction(text)
+            item.setCheckable(True)
+            item.setChecked(action.isChecked())
+            item.setEnabled(enabled)
+            def _drill(a=action, r=row):
+                # the clicked row is the anchor the regrouped view keeps in view
+                view._rows_selection = {model.index(r, view.trackingCol).data()}
+                view.selectIndices()
+                view.selectionModel().setCurrentIndex(
+                    model.index(r, 0), QtCore.QItemSelectionModel.SelectionFlag.NoUpdate)
+                a.setChecked(not a.isChecked())
+            handlers[item] = _drill
+
+        menu.addSeparator()
+        act = menu.addAction(Icons.new(self, "edit-copy"), QC.translate("stats", "Copy row"))
+        handlers[act] = lambda: self.copy_selected_rows()
+        act = menu.addAction(Icons.new(self, "document-save"), QC.translate("stats", "Export CSV..."))
+        handlers[act] = lambda: self.on_menu_export_csv_clicked(idx)
+        return menu, handlers
+
+    def configure_history_contextual_menu(self, pos):
+        try:
+            idx = self.get_current_view_idx()
+            table = self.TABLES[idx]['view']
+            index = table.indexAt(pos)
+            if not index.isValid():
+                return False
+            menu, handlers = self.build_history_menu(idx, index.row())
+            self.set_context_menu_active(True)
+            try:
+                action = menu.exec(QtGui.QCursor.pos())
+            finally:
+                self.set_context_menu_active(False)
+            handler = handlers.get(action)
+            if handler is not None:
+                handler()
+        except Exception as e:
+            print("history contextual menu exception:", e)
+        return False
 
     def configure_alerts_contextual_menu(self, pos):
         try:
@@ -398,8 +443,7 @@ class MenusManager(views.ViewsManager):
             self.set_view_context_menu(constants.TAB_ALERTS, menu)
 
             # move away menu a few pixels to the right, to avoid clicking on it by mistake
-            point = QtCore.QPoint(pos.x()+10, pos.y()+5)
-            action = menu.exec(table.mapToGlobal(point))
+            action = menu.exec(QtGui.QCursor.pos())
 
             model = table.model()
 
@@ -424,13 +468,11 @@ class MenusManager(views.ViewsManager):
 
     def configure_tabs_contextual_menu(self, pos):
         tab_hidden_list = self.cfg.getList(Config.STATS_TAB_HIDDEN_LIST)
+        if tab_hidden_list is None:
+            tab_hidden_list = []
         tab_list = []
 
         menu = QtWidgets.QMenu(self)
-        menu_edit = menu.addAction(QC.translate("stats", "Edit"))
-        menu_edit.setCheckable(True)
-        menu_edit.setChecked(self._editing_tabs)
-        menu.addSeparator()
 
         for idx, key in enumerate(self.TABLES):
             # some tables/views are not a tab, but part of a group inside a
@@ -442,57 +484,57 @@ class MenusManager(views.ViewsManager):
             # XXX: when loading the list for the first time, the list is a list of
             # strings. When opening the contextual menu several times, the list
             # is a list of integers.
-            if tab_hidden_list is not None and (str(key) in tab_hidden_list or key in tab_hidden_list):
+            if str(key) in tab_hidden_list or key in tab_hidden_list:
                 checked = False
 
-            w = self.tabWidget.widget(idx)
+            w = self.stackedWidget.widget(idx)
             if w is None:
                 continue
 
-            if not checked:
-                m = menu.addAction(self.TABLES[key]['tabName'])
-                m.setObjectName(str(key))
-                m.setCheckable(True)
-                m.setChecked(checked)
-                tab_list.append(m)
+            m = menu.addAction(self.TABLES[key]['tabName'])
+            m.setObjectName(str(key))
+            m.setCheckable(True)
+            m.setChecked(checked)
+            if idx == constants.TAB_MAIN:
+                m.setEnabled(False)
+            tab_list.append(m)
 
-        point = QtCore.QPoint(pos.x()+10, pos.y()+5)
-        action = menu.exec(self.tabWidget.mapToGlobal(point))
+        action = menu.exec(QtGui.QCursor.pos())
         if action is None:
             return
 
-        if menu_edit == action:
-            self._editing_tabs = action.isChecked()
-            self.tabWidget.setTabsClosable(self._editing_tabs)
-        else:
-            for idx, tab in enumerate(tab_list):
-                if tab == action:
-                    tab_id = tab.objectName()
-                    if not tab.isChecked():
-                        tab_hidden_list.append(tab_id)
-                    else:
-                        # FIXME: when saving the list and reading it again, the
-                        # values are integers instead of strings, so we need to
-                        # do this sorcery to test that a value is in the list.
-                        # PRs to improve it welcome.
-                        tab_int = -1
-                        try:
-                            tab_int = int(tab_id)
-                        except:
-                            pass
-                        tab_removed = None
-                        if tab_id in tab_hidden_list:
-                            tab_hidden_list.remove(tab_id)
-                            tab_removed = tab_id
-                        if tab_int in tab_hidden_list:
-                            tab_hidden_list.remove(tab_int)
-                            tab_removed = str(tab_int)
+        for idx, tab in enumerate(tab_list):
+            if tab == action:
+                tab_id = tab.objectName()
+                if not tab.isChecked():
+                    tab_idx = self.get_tab_index_by_name(str(tab_id))
+                    if tab_idx is not None:
+                        # hides the view and saves the hidden list
+                        self._cb_tab_closed(tab_idx)
+                    return
+                else:
+                    # FIXME: when saving the list and reading it again, the
+                    # values are integers instead of strings, so we need to
+                    # do this sorcery to test that a value is in the list.
+                    # PRs to improve it welcome.
+                    tab_int = -1
+                    try:
+                        tab_int = int(tab_id)
+                    except:
+                        pass
+                    tab_removed = None
+                    if tab_id in tab_hidden_list:
+                        tab_hidden_list.remove(tab_id)
+                        tab_removed = tab_id
+                    if tab_int in tab_hidden_list:
+                        tab_hidden_list.remove(tab_int)
+                        tab_removed = str(tab_int)
 
-                        if tab_removed is not None:
-                            tab_idx = self.get_tab_index_by_name(str(tab_id))
-                            if tab_idx is not None:
-                                self.tabWidget.setTabVisible(tab_idx, True)
-                    break
+                    if tab_removed is not None:
+                        tab_idx = self.get_tab_index_by_name(str(tab_id))
+                        if tab_idx is not None:
+                            self.sidebar.setItemVisible(tab_idx, True)
+                break
 
-            self.cfg.setSettings(Config.STATS_TAB_HIDDEN_LIST, tab_hidden_list)
+        self.cfg.setSettings(Config.STATS_TAB_HIDDEN_LIST, tab_hidden_list)
 

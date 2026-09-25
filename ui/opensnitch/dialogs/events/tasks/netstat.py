@@ -20,7 +20,11 @@ class Netstat:
         self.db = db
         self.cfg = cfg
 
+        self._monitored_nodes = set()
         self.configure()
+        for combo in (self.win.comboNetstatProto, self.win.comboNetstatFamily, self.win.comboNetstatStates):
+            combo.setCurrentIndex(0)
+        self.win.netstatFilterRow.hide()
 
         self.win.comboNetstatInterval.currentIndexChanged.connect(lambda index: self.cb_combo_netstat_changed(0, index))
         self.win.comboNetstatNodes.activated.connect(lambda index: self.cb_combo_netstat_changed(1, index))
@@ -28,11 +32,21 @@ class Netstat:
         self.win.comboNetstatFamily.currentIndexChanged.connect(lambda index: self.cb_combo_netstat_changed(3, index))
         self.win.comboNetstatStates.currentIndexChanged.connect(lambda index: self.cb_combo_netstat_changed(4, index))
 
+    def default_interval_index(self):
+        """the 5s entry if there is one, else the first interval after Stop"""
+        combo = self.win.comboNetstatInterval
+        for i in range(combo.count()):
+            if combo.itemText(i).strip().lower() in ("5s", "5"):
+                return i
+        return 1 if combo.count() > 1 else 0
+
     def cb_combo_netstat_changed(self, combo, idx):
         refreshIndex = self.win.comboNetstatInterval.currentIndex()
         self.unmonitor_node(self.win.LAST_NETSTAT_NODE)
         if refreshIndex > 0:
             self.monitor_node()
+        if combo == 0:
+            self.cfg.setSettings(Config.STATS_NETSTAT_INTERVAL, refreshIndex)
 
         if combo == 2:
             self.cfg.setSettings(Config.STATS_NETSTAT_FILTER_PROTO, self.win.comboNetstatProto.currentIndex())
@@ -125,22 +139,30 @@ class Netstat:
 
         self.win.comboNetstatNodes.blockSignals(False);
 
+    def select_node(self, addr):
+        """follow the sidebar's node selector; an empty addr keeps the
+        current entry"""
+        if not addr:
+            return False
+        idx = self.win.comboNetstatNodes.findData(addr)
+        if idx < 0 or idx == self.win.comboNetstatNodes.currentIndex():
+            return False
+        self.win.comboNetstatNodes.setCurrentIndex(idx)
+        return True
+
     def monitor_node(self):
         self.win.netstatLabel.show()
 
-        nIdx = self.win.comboNetstatNodes.currentIndex()
-        node_addr = self.win.comboNetstatNodes.itemData(nIdx)
-        if node_addr == "":
-            self.win.netstatLabel.setText("")
+        selected = self.win.sidebar.selectedNodes()
+        node_addrs = selected or list(self.win._nodes.get_nodes())
+        node_addrs = [addr for addr in node_addrs if self.win._nodes.is_connected(addr)]
+        if not node_addrs:
+            self.win.netstatLabel.setText(QC.translate("stats", "No selected node is connected. Live socket updates are unavailable."))
             return
-        if not self.win._nodes.is_connected(node_addr):
-            #print(f"monitor_node_netstat, node not connected: {node_addr}")
-            self.win.netstatLabel.setText(f"{node_addr} node is not connected")
-            return
-
+        node_addr = node_addrs[0]
         refreshIndex = self.win.comboNetstatInterval.currentIndex()
         if refreshIndex == 0:
-            self.unmonitor_node(node_addr)
+            self.unmonitor_node(None)
             return
 
         refreshInterval = self.win.comboNetstatInterval.currentText()
@@ -163,19 +185,23 @@ class Netstat:
             type=ui_pb2.TASK_START,
             data=config,
             rules=[])
-        nid = self.win.send_notification(
-            node_addr, noti, self.win._notification_callback
-        )
-        if nid is not None:
-            self.win.save_ntf(nid, noti)
-
+        for addr in self._monitored_nodes - set(node_addrs):
+            self.unmonitor_node(addr)
+        for addr in node_addrs:
+            nid = self.win.send_notification(addr, noti, self.win._notification_callback)
+            if nid is not None:
+                self.win.save_ntf(nid, noti)
+            self._monitored_nodes.add(addr)
         self.win.LAST_NETSTAT_NODE = node_addr
 
     def unmonitor_node(self, node_addr):
         self.win.netstatLabel.hide()
         self.win.netstatLabel.setText("")
-        if node_addr == "":
+        if not node_addr:
+            for addr in list(self._monitored_nodes):
+                self.unmonitor_node(addr)
             return
+        self._monitored_nodes.discard(node_addr)
 
         if self.win._nodes.is_connected(node_addr):
             noti = ui_pb2.Notification(
@@ -194,6 +220,17 @@ class Netstat:
 
         self.win.LAST_NETSTAT_NODE = None
 
+    def apply_filter(self, condition=None):
+        if condition is None:
+            text = self.win.filterBar.chipsFilterText()
+            condition = self.win.queries.advanced_search(text) if text else ""
+        config = self.win.TABLES[constants.TAB_NETSTAT]
+        query = "SELECT " + config['display_fields'] + " FROM sockets AS c"
+        if condition:
+            query += " WHERE " + condition
+        query += self.win.get_view_order() + self.win.get_view_limit()
+        self.win.queries.setQuery(config['view'].model(), query, limit=self.win.get_query_limit())
+
     def update_node(self, node_addr, data):
         netstat = json.loads(data)
         fields = []
@@ -202,7 +239,7 @@ class Netstat:
         try:
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             # TODO: make this optional
-            self.db.clean(self.win.TABLES[ constants.TAB_NETSTAT]['name'])
+            self.db.remove("DELETE FROM sockets WHERE node = ?", [node_addr])
             self.db.transaction()
             for k in netstat['Table']:
                 if k == None:
@@ -247,7 +284,8 @@ class Netstat:
                 )
             self.db.commit()
             self.win.netstatLabel.setText(QC.translate("stats", "refreshing..."))
-            self.win.refresh_active_table()
+            if self.win.get_current_view_idx() == constants.TAB_NETSTAT:
+                self.apply_filter()
         except Exception as e:
             print("_update_netstat_table exception:", e)
             print(data)

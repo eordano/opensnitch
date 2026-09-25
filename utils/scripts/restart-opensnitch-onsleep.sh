@@ -7,8 +7,8 @@
 # Copy it to /lib/systemd/system-sleep/ with any name and exec permissions.
 #
 if [ "$1" == "pre" ]; then
-    service opensnitchd stop
+  service opensnitchd stop
 elif [ "$1" == "post" ]; then
-    service opensnitchd stop
-    service opensnitchd start
+  service opensnitchd stop
+  service opensnitchd start
 fi

@@ -285,7 +285,7 @@ def save_nodes_config(win):
     if win.node_needs_update is False:
         return True
     if addr is None:
-        utils.set_status_message(win, QC.translate("preferences", "There're no nodes connected"))
+        utils.set_status_message(win, utils.no_nodes_message())
         return False
 
     utils.set_status_message(win, QC.translate("preferences", "Saving configuration..."))

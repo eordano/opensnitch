@@ -105,7 +105,7 @@
           <bool>false</bool>
          </property>
          <property name="toolTip">
-          <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;The value of this field is always the absolute path to the executable: /path/to/binary&lt;br/&gt;&lt;/p&gt;&lt;p&gt;Examples:&lt;/p&gt;&lt;p&gt;- Simple: /path/to/binary&lt;/p&gt;&lt;p&gt;- Multiple paths: ^/usr/lib(64|)/firefox/firefox$&lt;/p&gt;&lt;p&gt;- Multiple binaries: ^(/usr/sbin/ntpd|/lib/systemd/systemd-timesyncd|/usr/bin/xbrlapi|/usr/bin/dirmngr)$ &lt;/p&gt;&lt;p&gt;- Deny/Allow executions from /tmp:&lt;/p&gt;&lt;p&gt;^/(var/|)tmp/.*$&lt;br/&gt;&lt;/p&gt;&lt;p&gt;For more examples visit the &lt;a href=&quot;https://github.com/evilsocket/opensnitch/wiki/Rules-examples&quot;&gt;wiki page&lt;/a&gt; or ask on the &lt;a href=&quot;https://github.com/evilsocket/opensnitch/discussions&quot;&gt;Discussion forums&lt;/a&gt;.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+          <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;The value of this field is always the absolute path to the executable: /path/to/binary&lt;br/&gt;&lt;/p&gt;&lt;p&gt;Examples:&lt;/p&gt;&lt;p&gt;- Simple: /path/to/binary&lt;/p&gt;&lt;p&gt;- Multiple paths: ^/usr/lib(64|)/firefox/firefox$&lt;/p&gt;&lt;p&gt;- Multiple binaries: ^(/usr/sbin/ntpd|/lib/systemd/systemd-timesyncd|/usr/bin/xbrlapi|/usr/bin/dirmngr)$ &lt;/p&gt;&lt;p&gt;- Deny/Allow executions from /tmp:&lt;/p&gt;&lt;p&gt;^/(var/|)tmp/.*$&lt;br/&gt;&lt;/p&gt;&lt;p&gt;For more examples visit the &lt;a href="https://github.com/evilsocket/opensnitch/wiki/Rules-examples"&gt;wiki page&lt;/a&gt; or ask on the &lt;a href="https://github.com/evilsocket/opensnitch/discussions"&gt;Discussion forums&lt;/a&gt;.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
          </property>
         </widget>
        </item>
@@ -519,7 +519,7 @@ You can also specify a subnet:
 Note: Commas or spaces are not allowed to separate IPs or networks.</string>
          </property>
          <property name="statusTip">
-          <string/>
+          <string />
          </property>
          <property name="editable">
           <bool>true</bool>
@@ -701,7 +701,7 @@ Note: Commas or spaces are not allowed to separate IPs or networks.</string>
             <bool>false</bool>
            </property>
            <property name="text">
-            <string/>
+            <string />
            </property>
            <property name="icon">
             <iconset theme="system-search">
@@ -736,7 +736,7 @@ Note: Commas or spaces are not allowed to separate IPs or networks.</string>
             <bool>false</bool>
            </property>
            <property name="text">
-            <string/>
+            <string />
            </property>
            <property name="icon">
             <iconset theme="system-search">
@@ -764,7 +764,7 @@ Note: Commas or spaces are not allowed to separate IPs or networks.</string>
             <bool>false</bool>
            </property>
            <property name="text">
-            <string/>
+            <string />
            </property>
            <property name="icon">
             <iconset theme="system-search">
@@ -806,7 +806,7 @@ Note: Commas or spaces are not allowed to separate IPs or networks.</string>
             <bool>false</bool>
            </property>
            <property name="text">
-            <string/>
+            <string />
            </property>
            <property name="icon">
             <iconset theme="system-search">
@@ -887,10 +887,10 @@ Note: Commas or spaces are not allowed to separate IPs or networks.</string>
        <item row="1" column="0">
         <widget class="QCheckBox" name="nologCheck">
          <property name="statusTip">
-          <string>Don't log connections that match this rule</string>
+          <string>Do not log connections that match this rule</string>
          </property>
          <property name="text">
-          <string>Don't log connections</string>
+          <string>Do not log connections</string>
          </property>
         </widget>
        </item>
@@ -912,7 +912,7 @@ Note: Commas or spaces are not allowed to separate IPs or networks.</string>
 Feedback is welcome</string>
            </property>
            <property name="text">
-            <string/>
+            <string />
            </property>
            <property name="icon">
             <iconset theme="dialog-warning">
@@ -943,21 +943,6 @@ Feedback is welcome</string>
        </item>
       </layout>
      </widget>
-    </widget>
-   </item>
-   <item row="5" column="0">
-    <widget class="QCheckBox" name="precedenceCheck">
-     <property name="toolTip">
-      <string>If checked, this rule will take precedence over the rest of the rules. No others rules will be checked after this one.
-
-You must name the rule in such manner that it'll be checked first, because they're checked in alphabetical order. For example:
-
-[x] Priority - 000-priority-rule
-[  ] Priority - 001-less-priority-rule</string>
-     </property>
-     <property name="text">
-      <string>Priority rule</string>
-     </property>
     </widget>
    </item>
    <item row="0" column="0">
@@ -992,7 +977,7 @@ You must name the rule in such manner that it'll be checked first, because they'
       <bool>true</bool>
      </property>
      <property name="text">
-      <string/>
+      <string />
      </property>
      <property name="wordWrap">
       <bool>true</bool>
@@ -1016,7 +1001,7 @@ You must name the rule in such manner that it'll be checked first, because they'
      <property name="checked">
       <bool>false</bool>
      </property>
-     <layout class="QGridLayout" name="gridLayout" columnstretch="0,0,0,0,0,0,0">
+     <layout class="QGridLayout" name="gridLayout" columnstretch="0,0,0,1">
       <property name="sizeConstraint">
        <enum>QLayout::SizeConstraint::SetDefaultConstraint</enum>
       </property>
@@ -1029,47 +1014,21 @@ You must name the rule in such manner that it'll be checked first, because they'
       <property name="verticalSpacing">
        <number>12</number>
       </property>
-      <item row="3" column="1">
+      <item row="0" column="0">
        <widget class="QLabel" name="label_2">
         <property name="text">
          <string>Action</string>
         </property>
        </widget>
       </item>
-      <item row="4" column="4">
-       <spacer name="horizontalSpacer_5">
-        <property name="orientation">
-         <enum>Qt::Horizontal</enum>
-        </property>
-        <property name="sizeHint" stdset="0">
-         <size>
-          <width>40</width>
-          <height>20</height>
-         </size>
-        </property>
-       </spacer>
-      </item>
-      <item row="3" column="4">
-       <spacer name="horizontalSpacer_4">
-        <property name="orientation">
-         <enum>Qt::Horizontal</enum>
-        </property>
-        <property name="sizeHint" stdset="0">
-         <size>
-          <width>40</width>
-          <height>20</height>
-         </size>
-        </property>
-       </spacer>
-      </item>
-      <item row="4" column="1">
+      <item row="0" column="2">
        <widget class="QLabel" name="label_4">
         <property name="text">
          <string>Duration</string>
         </property>
        </widget>
       </item>
-      <item row="4" column="6">
+      <item row="0" column="3">
        <widget class="QComboBox" name="durationCombo">
         <item>
          <property name="text">
@@ -1118,7 +1077,7 @@ You must name the rule in such manner that it'll be checked first, because they'
         </item>
        </widget>
       </item>
-      <item row="3" column="6">
+      <item row="0" column="1">
        <layout class="QHBoxLayout" name="horizontalLayout_2">
         <item>
          <widget class="QRadioButton" name="actionDenyRadio">
@@ -1185,17 +1144,10 @@ You must name the rule in such manner that it'll be checked first, because they'
      </layout>
     </widget>
    </item>
-   <item row="4" column="0">
-    <widget class="QCheckBox" name="enableCheck">
-     <property name="text">
-      <string>Enable</string>
-     </property>
-    </widget>
-   </item>
    <item row="2" column="0">
     <layout class="QHBoxLayout" name="horizontalLayout">
      <item>
-      <widget class="QComboBox" name="nodesCombo"/>
+      <widget class="QComboBox" name="nodesCombo" />
      </item>
      <item>
       <spacer name="horizontalSpacer">
@@ -1223,6 +1175,32 @@ You must name the rule in such manner that it'll be checked first, because they'
        </property>
        <property name="text">
         <string>Apply rule to all nodes</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+   <item row="4" column="0">
+    <layout class="QHBoxLayout" name="ruleFlagsLayout">
+     <item>
+      <widget class="QCheckBox" name="enableCheck">
+       <property name="text">
+        <string>Enable</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QCheckBox" name="precedenceCheck">
+       <property name="toolTip">
+        <string>If checked, this rule will take precedence over the rest of the rules. No others rules will be checked after this one.
+
+You must name the rule in such manner that it'll be checked first, because they're checked in alphabetical order. For example:
+
+[x] Priority - 000-priority-rule
+[  ] Priority - 001-less-priority-rule</string>
+       </property>
+       <property name="text">
+        <string>Priority rule</string>
        </property>
       </widget>
      </item>
@@ -1284,6 +1262,6 @@ You must name the rule in such manner that it'll be checked first, because they'
   <tabstop>md5Check</tabstop>
   <tabstop>md5Line</tabstop>
  </tabstops>
- <resources/>
- <connections/>
+ <resources />
+ <connections />
 </ui>

@@ -62,6 +62,6 @@ if pyasn_util_download.py --latestv46 --filename "$RIBDATA_FILE"; then
     mv -vf "${IPASN_FILE}.gz.last" "${IPASN_FILE}.gz"
   fi
 else
-    echo "Failed to download ipasn data, restoring backup"
-    mv -vf "${IPASN_FILE}.gz.last" "${IPASN_FILE}.gz"
+  echo "Failed to download ipasn data, restoring backup"
+  mv -vf "${IPASN_FILE}.gz.last" "${IPASN_FILE}.gz"
 fi

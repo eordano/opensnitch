@@ -1,5 +1,6 @@
 from slugify import slugify
 import os
+import re
 import ipaddress
 
 from PyQt6.QtCore import QCoreApplication as QC
@@ -7,6 +8,11 @@ from PyQt6.QtCore import QCoreApplication as QC
 from opensnitch.config import Config
 from opensnitch.dialogs.prompt import constants
 from opensnitch.utils.network_aliases import NetworkAliases
+
+_NIX_STORE_RE = re.compile(r'/nix/store/([a-z0-9]{32})-')
+
+def collapse_nix_hash(text):
+    return _NIX_STORE_RE.sub('/nix/store/...-', text)
 
 def truncate_text(text, max_size=64):
     if len(text) > max_size:
@@ -72,13 +78,14 @@ def set_app_path(appPathLabel, app_name, app_args, con):
     # cmdline: /usr/bin/telnet.netkit 1.1.1.1 (the binary path is part of the cmdline args, no need to display it)
     if con.process_path != "" and len(con.process_args) >= 1 and con.process_path not in con.process_args:
         appPathLabel.setToolTip("Process path: {0}".format(con.process_path))
+        display_path = collapse_nix_hash(con.process_path)
         if app_name.lower() == app_args:
-            set_elide_text(appPathLabel, "%s" % con.process_path)
+            set_elide_text(appPathLabel, "%s" % display_path)
         else:
-            set_elide_text(appPathLabel, "(%s)" % con.process_path)
+            set_elide_text(appPathLabel, "(%s)" % display_path)
         appPathLabel.setVisible(True)
     elif con.process_path != "" and len(con.process_args) == 0:
-        set_elide_text(appPathLabel, "%s" % con.process_path)
+        set_elide_text(appPathLabel, "%s" % collapse_nix_hash(con.process_path))
         appPathLabel.setVisible(True)
     else:
         appPathLabel.setVisible(False)
@@ -95,7 +102,8 @@ def set_app_args(argsLabel, app_name, app_args):
     # the args label (amule for example)
     if app_name.lower() != app_args:
         argsLabel.setVisible(True)
-        set_elide_text(argsLabel, app_args, 256)
+        display_args = collapse_nix_hash(app_args)
+        set_elide_text(argsLabel, display_args, 256)
         argsLabel.setToolTip(app_args)
     else:
         argsLabel.setVisible(False)
@@ -127,20 +135,20 @@ def set_app_description(appDescriptionLabel, description):
 def add_fixed_options_to_combo(combo, con, uid):
     # the order of these combobox entries must match those in the preferences dialog
     # prefs -> UI -> Default target
-    combo.addItem(QC.translate("popups", "from this executable"), constants.FIELD_PROC_PATH)
+    combo.addItem(QC.translate("popups", "this executable"), constants.FIELD_PROC_PATH)
     if int(con.process_id) < 0:
         combo.model().item(constants.TARGET_IDX_PROC_PATH).setEnabled(False)
 
-    combo.addItem(QC.translate("popups", "from this command line"), constants.FIELD_PROC_ARGS)
+    combo.addItem(QC.translate("popups", "this command and arguments"), constants.FIELD_PROC_ARGS)
 
     combo.addItem(QC.translate("popups", "to port {0}").format(con.dst_port), constants.FIELD_DST_PORT)
     combo.addItem(QC.translate("popups", "to {0}").format(con.dst_ip), constants.FIELD_DST_IP)
 
-    combo.addItem(QC.translate("popups", "from user {0}").format(uid), constants.FIELD_USER_ID)
+    combo.addItem(QC.translate("popups", "user {0}").format(uid), constants.FIELD_USER_ID)
     if int(con.user_id) < 0:
         combo.model().item(constants.TARGET_IDX_UID).setEnabled(False)
 
-    combo.addItem(QC.translate("popups", "from this PID"), constants.FIELD_PROC_ID)
+    combo.addItem(QC.translate("popups", "this PID"), constants.FIELD_PROC_ID)
 
 def add_ip_regexp_to_combo(combo, IPcombo, con):
     IPcombo.addItem(QC.translate("popups", "to {0}").format(con.dst_ip), constants.FIELD_DST_IP)

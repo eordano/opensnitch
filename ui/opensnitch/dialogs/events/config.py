@@ -48,7 +48,7 @@ class ConfigManager:
         self.COL_STR_PID = QC.translate("stats", "PID", "This is a word, without spaces and symbols.").replace(" ", "")
         self.COL_STR_LAST_CONNECTION = QC.translate("stats", "LastConnection", "This is a word, without spaces and symbols.").replace(" ", "")
         self.COL_STR_TYPE = QC.translate("stats", "Type", "This is a word, without spaces and symbols.").replace(" ", "")
-        self.COL_STR_WHAT = QC.translate("stats", "What", "This is a word, without spaces and symbols.").replace(" ", "")
+        self.COL_STR_WHAT = QC.translate("stats", "Message", "This is a word, without spaces and symbols.").replace(" ", "")
         self.COL_STR_PRIORITY = QC.translate("stats", "Priority", "This is a word, without spaces and symbols.").replace(" ", "")
         self.COL_STR_FAMILY = QC.translate("stats", "Family", "This is a word, without spaces and symbols.").replace(" ", "")
         self.COL_STR_IFACE = QC.translate("stats", "Iface", "This is a word, without spaces and symbols.").replace(" ", "")
@@ -196,10 +196,8 @@ class ConfigManager:
             "FROM connections as c " \
             "WHERE c.uid = '%DATA%'"
 
-        stats_headers = [
-            self.COL_STR_WHAT,
-            self.COL_STR_HITS
-        ]
+        def stats_headers_for(label):
+            return [QC.translate("stats", label), self.COL_STR_HITS]
 
         # in order to let users create dynamic views, we'd have to:
         # - add a new item to this configuration
@@ -370,9 +368,9 @@ class ConfigManager:
                 "filterLine": None,
                 "model": None,
                 "delegate": "commonDelegateConfig",
-                "display_fields": "*",
+                "display_fields": f'what as "{QC.translate("stats", "Host")}", hits as {self.COL_STR_HITS}',
                 "query": hosts_query,
-                "header_labels": stats_headers,
+                "header_labels": stats_headers_for("Host"),
                 "completer": None,
                 "context_menu": None,
                 "last_order_by": "2",
@@ -392,9 +390,9 @@ class ConfigManager:
                 "filterLine": None,
                 "model": None,
                 "delegate": "commonDelegateConfig",
-                "display_fields": "*",
+                "display_fields": f'what as "{QC.translate("stats", "Process")}", hits as {self.COL_STR_HITS}',
                 "query": procs_query,
-                "header_labels": stats_headers,
+                "header_labels": stats_headers_for("Process"),
                 "completer": None,
                 "context_menu": None,
                 "last_order_by": "2",
@@ -414,9 +412,9 @@ class ConfigManager:
                 "filterLine": None,
                 "model": None,
                 "delegate": "commonDelegateConfig",
-                "display_fields": "*",
+                "display_fields": f'what as "{QC.translate("stats", "IP")}", hits as {self.COL_STR_HITS}',
                 "query": addrs_query,
-                "header_labels": stats_headers,
+                "header_labels": stats_headers_for("IP"),
                 "completer": None,
                 "context_menu": None,
                 "last_order_by": "2",
@@ -436,9 +434,9 @@ class ConfigManager:
                 "filterLine": None,
                 "model": None,
                 "delegate": "commonDelegateConfig",
-                "display_fields": "*",
+                "display_fields": f'what as "{QC.translate("stats", "Port")}", hits as {self.COL_STR_HITS}',
                 "query": ports_query,
-                "header_labels": stats_headers,
+                "header_labels": stats_headers_for("Port"),
                 "completer": None,
                 "context_menu": None,
                 "last_order_by": "2",
@@ -458,9 +456,9 @@ class ConfigManager:
                 "filterLine": None,
                 "model": None,
                 "delegate": "commonDelegateConfig",
-                "display_fields": "*",
+                "display_fields": f'what as "{QC.translate("stats", "User")}", hits as {self.COL_STR_HITS}',
                 "query": users_query,
-                "header_labels": stats_headers,
+                "header_labels": stats_headers_for("User"),
                 "completer": None,
                 "context_menu": None,
                 "last_order_by": "2",

@@ -38,9 +38,11 @@ var basicTask = BasicTask{
 	},
 }
 
-func taskEvents(tm *TaskManager, t *testing.T) {
+func taskEvents(ctx context.Context, tm *TaskManager, t *testing.T) {
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case task := <-tm.TaskAdded:
 			t.Log("TaskMgr.TaskAdded:", task.Name)
 		case task := <-tm.TaskRemoved:
@@ -51,7 +53,9 @@ func taskEvents(tm *TaskManager, t *testing.T) {
 
 func TestTaskManager(t *testing.T) {
 	tkMgr := NewTaskManager()
-	go taskEvents(tkMgr, t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go taskEvents(ctx, tkMgr, t)
 
 	t.Run("AddTask", func(t *testing.T) {
 		_, err := tkMgr.AddTask(basicTask.Name, &basicTask)

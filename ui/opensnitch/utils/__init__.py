@@ -8,6 +8,7 @@ import os, os.path
 import enum
 import re
 import gc
+import ipaddress
 
 from PyQt6 import QtCore, QtWidgets, QtGui
 from opensnitch.version import version as gui_version
@@ -105,6 +106,9 @@ class AsnDB():
             return ""
 
     def get_asn(self, ip):
+        geo = GeoDB.instance()
+        if geo.has_asn():
+            return geo.asn(ip)
         try:
             self._load_if_needed()
 
@@ -112,6 +116,154 @@ class AsnDB():
             return self.get_as_name(asn)
         except Exception:
             return ""
+
+class GeoDB():
+    """IP -> country / network name lookups over MaxMind-format (.mmdb)
+    databases, such as DB-IP lite or GeoLite2. Looked up in
+    $OPENSNITCH_MMDB_DIR, ~/.config/opensnitch and the usual system dirs."""
+    __instance = None
+    COUNTRY_FILES = ("dbip-country-lite.mmdb", "dbip-city-lite.mmdb", "GeoLite2-Country.mmdb", "GeoLite2-City.mmdb")
+    ASN_FILES = ("dbip-asn-lite.mmdb", "GeoLite2-ASN.mmdb")
+    SYSTEM_DIRS = ("/usr/share/dbip", "/var/lib/GeoIP", "/usr/share/GeoIP")
+    CACHE_MAX = 4096
+
+    @staticmethod
+    def instance():
+        if GeoDB.__instance is None:
+            GeoDB.__instance = GeoDB()
+        return GeoDB.__instance
+
+    def __init__(self):
+        self._country_db = None
+        self._asn_db = None
+        self._loaded = False
+        self._available = None
+        self._cache = {}
+        self.country_path = ""
+        self.asn_path = ""
+
+    def dirs(self):
+        dirs = []
+        env = os.environ.get("OPENSNITCH_MMDB_DIR", "")
+        if env != "":
+            dirs.append(env)
+        dirs.append(os.path.expanduser("~/.config/opensnitch"))
+        dirs.extend(self.SYSTEM_DIRS)
+        return dirs
+
+    def _find(self, names):
+        for d in self.dirs():
+            for n in names:
+                p = os.path.join(d, n)
+                if os.path.isfile(p):
+                    return p
+        return ""
+
+    def is_available(self):
+        if self._available is None:
+            try:
+                import maxminddb
+                self._available = self._find(self.COUNTRY_FILES) != "" or self._find(self.ASN_FILES) != ""
+            except Exception:
+                self._available = False
+        return self._available
+
+    def has_country(self):
+        self._load()
+        return self._country_db is not None
+
+    def has_asn(self):
+        self._load()
+        return self._asn_db is not None
+
+    def _load(self):
+        if self._loaded:
+            return
+        self._loaded = True
+        try:
+            import maxminddb
+        except Exception as e:
+            print("GeoDB: python3-maxminddb not installed, GeoIP columns disabled:", e)
+            return
+        self.country_path = self._find(self.COUNTRY_FILES)
+        self.asn_path = self._find(self.ASN_FILES)
+        try:
+            if self.country_path != "":
+                self._country_db = maxminddb.open_database(self.country_path)
+        except Exception as e:
+            print("GeoDB: error opening", self.country_path, e)
+        try:
+            if self.asn_path != "":
+                self._asn_db = maxminddb.open_database(self.asn_path)
+        except Exception as e:
+            print("GeoDB: error opening", self.asn_path, e)
+
+    def unload(self):
+        for db in (self._country_db, self._asn_db):
+            try:
+                if db is not None:
+                    db.close()
+            except Exception:
+                pass
+        self._country_db = None
+        self._asn_db = None
+        self._loaded = False
+        self._cache = {}
+
+    @staticmethod
+    def is_public(ip):
+        try:
+            addr = ipaddress.ip_address(ip)
+        except ValueError:
+            return False
+        return not (addr.is_private or addr.is_loopback or addr.is_link_local or
+                    addr.is_multicast or addr.is_reserved or addr.is_unspecified)
+
+    def _cached(self, kind, ip, fn):
+        key = (kind, ip)
+        if key in self._cache:
+            return self._cache[key]
+        try:
+            value = fn(ip)
+        except Exception:
+            value = ""
+        if len(self._cache) >= self.CACHE_MAX:
+            self._cache = {}
+        self._cache[key] = value
+        return value
+
+    def country(self, ip):
+        """'DE Germany' for a public IP, '' otherwise."""
+        self._load()
+        if self._country_db is None or not self.is_public(ip):
+            return ""
+        return self._cached("country", ip, self._country)
+
+    def _country(self, ip):
+        rec = self._country_db.get(ip)
+        if not rec:
+            return ""
+        c = rec.get("country") or rec.get("registered_country") or {}
+        code = c.get("iso_code", "")
+        name = (c.get("names") or {}).get("en", "")
+        return f"{code} {name}".strip()
+
+    def asn(self, ip):
+        """'AS15169 Google LLC' for a public IP, '' otherwise."""
+        self._load()
+        if self._asn_db is None or not self.is_public(ip):
+            return ""
+        return self._cached("asn", ip, self._asn)
+
+    def _asn(self, ip):
+        rec = self._asn_db.get(ip)
+        if not rec:
+            return ""
+        num = rec.get("autonomous_system_number", "")
+        org = rec.get("autonomous_system_organization", "")
+        if num == "":
+            return org
+        return f"AS{num} {org}".strip()
 
 class GenericTimer(Thread):
     interval = 1

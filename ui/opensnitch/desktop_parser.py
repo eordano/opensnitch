@@ -124,6 +124,10 @@ class LinuxDesktopParser(threading.Thread):
                 return
 
             cmd  = self._parse_exec(cmdline)
+            if cmd == "":
+                # e.g. org.kde.kwin.dialoghelper.desktop ships "Exec=". Indexing
+                # it under "" would name every unknown-process connection after it.
+                return
             icon = parser.get('Desktop Entry', 'Icon', raw=True, fallback=None)
             name = parser.get('Desktop Entry', 'Name', raw=True, fallback=None)
             desc = self.get_app_description(parser)
@@ -152,6 +156,8 @@ class LinuxDesktopParser(threading.Thread):
             print("Exception parsing .desktop file ", desktop_path)
 
     def get_info_by_path(self, path, default_icon):
+        if path == "":
+            return ("", default_icon, "", None)
         def_name = os.path.basename(path)
         # apply fixes
         for orig, to in self.fixes.items():

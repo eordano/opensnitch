@@ -84,6 +84,34 @@ TAB_ALERTS = 10 # in rules tab
 
 TAB_TOTAL = 11
 
+# summary views ("history"): the column each one is keyed by, and the extra
+# dimensions rows can be split by. Order here is the menu order.
+SPLIT_DIMENSIONS = [
+    ("host", "Host", "dst_host"),
+    ("ip", "IP", "dst_ip"),
+    ("port", "Port", "dst_port"),
+    ("proto", "Protocol", "protocol"),
+    ("process", "Process", "process"),
+    ("uid", "User", "uid"),
+    ("action", "Action", "action"),
+    ("rule", "Rule", "rule"),
+    ("node", "Node", "node"),
+]
+SPLIT_VIEW_KEY = {
+    TAB_HOSTS: "host",
+    TAB_PROCS: "process",
+    TAB_ADDRS: "ip",
+    TAB_PORTS: "port",
+    TAB_USERS: "uid",
+}
+SPLIT_DEFAULTS = {
+    TAB_HOSTS: ["ip"],
+}
+ENRICH_COLUMNS = [
+    ("asn", "Network name"),
+    ("country", "Country"),
+]
+
 # tree's top level items
 NO_PARENT = -1
 

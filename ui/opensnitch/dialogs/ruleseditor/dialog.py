@@ -1,3 +1,6 @@
+import datetime as creation_datetime
+import socket
+import re
 from PyQt6 import QtCore, QtGui, uic, QtWidgets
 from PyQt6.QtCore import QCoreApplication as QC
 from slugify import slugify
@@ -237,7 +240,7 @@ class RulesEditorDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
 
     def cb_save_clicked(self):
         if self.nodesCombo.count() == 0:
-            utils.set_status_error(self, QC.translate("rules", "There're no nodes connected."))
+            utils.set_status_error(self, QC.translate("rules", "There are no nodes connected."))
             return
 
         rule_name = self.ruleNameEdit.text()
@@ -251,11 +254,11 @@ class RulesEditorDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         # - when a rule is renamed, i.e., the rule is edited or added and the
         #   user changes the name.
         if constants.WORK_MODE == constants.ADD_RULE and self._db.get_rule(rule_name, node).next() == True:
-            utils.set_status_error(self, QC.translate("rules", "There's already a rule with this name."))
+            utils.set_status_error(self, QC.translate("rules", "There is already a rule with this name."))
             return
         elif constants.WORK_MODE == constants.EDIT_RULE and rule_name != self._old_rule_name and \
             self._db.get_rule(rule_name, node).next() == True:
-            utils.set_status_error(self, QC.translate("rules", "There's already a rule with this name."))
+            utils.set_status_error(self, QC.translate("rules", "There is already a rule with this name."))
             return
 
         if self.md5Check.isChecked() and not self.procCheck.isChecked():
@@ -291,10 +294,28 @@ class RulesEditorDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
 
             del self.notifications_sent[reply.id]
 
+    def _prefill_creation_details(self):
+        values = []
+        for field, (editor_name, check_name) in self.SHARED_FIELD_WIDGETS.items():
+            if getattr(self, check_name).isChecked():
+                editor = getattr(self, editor_name)
+                value = editor.currentText() if isinstance(editor, QtWidgets.QComboBox) else editor.text()
+                values.append(field.replace("dst_", "") + "-" + value)
+        name = re.sub(r"[^A-Za-z0-9_.-]+", "-", "-".join(values) or "new-rule").strip("-")
+        self.ruleNameEdit.setText(name[:120])
+        stamp = creation_datetime.datetime.now(creation_datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        self.ruleDescEdit.setPlainText("Created from {0} UI at {1}".format(socket.gethostname(), stamp))
+        if self.dstPortCheck.isChecked():
+            for idx in range(self.tabWidget.count()):
+                if self.tabWidget.widget(idx).isAncestorOf(self.dstPortLine):
+                    self.tabWidget.setCurrentIndex(idx)
+                    break
+
     def new_rule(self):
         constants.WORK_MODE = constants.ADD_RULE
         utils.reset_state(self)
         nodes.load_all(self)
+        self._prefill_creation_details()
         self.show()
 
     def new_rule_from_connection(self, coltime):
@@ -309,11 +330,54 @@ class RulesEditorDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
                 return False
 
             rules.set_fields_from_connection(self, records)
+            self._prefill_creation_details()
             self.show()
         except Exception as e:
             self.logger.warning("exception creating new rule from connection: %s", repr(e))
             return False
 
+        return True
+
+    # shared field -> (line/combo to fill, checkbox that puts it in the rule)
+    SHARED_FIELD_WIDGETS = {
+        "process": ("procLine", "procCheck"),
+        "dst_host": ("dstHostLine", "dstHostCheck"),
+        "dst_ip": ("dstIPCombo", "dstIPCheck"),
+        "dst_port": ("dstPortLine", "dstPortCheck"),
+        "protocol": ("protoCombo", "protoCheck"),
+        "uid": ("uidCombo", "uidCheck"),
+    }
+
+    def new_rule_from_shared(self, shared, node=None):
+        """the editor filled in with what several connections share, and only
+        that checked: {field: value} over process, dst_host, dst_ip,
+        dst_port, protocol, uid"""
+        constants.WORK_MODE = constants.ADD_RULE
+        utils.reset_state(self)
+        nodes.load_all(self)
+        if not shared:
+            return False
+        if node:
+            idx = self.nodesCombo.findData(node)
+            if idx != -1:
+                self.nodesCombo.setCurrentIndex(idx)
+        for field, value in shared.items():
+            names = self.SHARED_FIELD_WIDGETS.get(field)
+            if names is None:
+                continue
+            editor = getattr(self, names[0])
+            check = getattr(self, names[1])
+            value = str(value)
+            if field == "protocol":
+                value = value.upper()
+            if isinstance(editor, QtWidgets.QComboBox):
+                editor.setCurrentText(value)
+            else:
+                editor.setText(value)
+            editor.setEnabled(True)
+            check.setChecked(True)
+        self._prefill_creation_details()
+        self.show()
         return True
 
     def edit_rule(self, records, _addr=None):

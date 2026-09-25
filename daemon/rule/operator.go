@@ -173,7 +173,7 @@ func (o *Operator) Compile() error {
 	} else if o.Type == Regexp {
 		o.cb = o.reCmp
 		if o.Sensitive == false {
-			o.Data = strings.ToLower(o.Data)
+			o.Data = "(?i)" + o.Data
 		}
 		re, err := regexp.Compile(o.Data)
 		if err != nil {
@@ -291,9 +291,6 @@ func (o *Operator) simpleCmp(v string) bool {
 }
 
 func (o *Operator) reCmp(data string) bool {
-	if o.Sensitive == false {
-		data = strings.ToLower(data)
-	}
 	return o.re.MatchString(data)
 }
 

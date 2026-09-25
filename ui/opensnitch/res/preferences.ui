@@ -536,7 +536,7 @@
                </sizepolicy>
               </property>
               <property name="toolTip">
-               <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;By default when a new pop-up appears, in its simplest form, you'll be able to filter connections or applications by one property of the connection (executable, port, IP, etc).&lt;/p&gt;&lt;p&gt;With these options, you can choose multiple fields to filter connections for.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+               <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;By default when a new pop-up appears, in its simplest form, you will be able to filter connections or applications by one property of the connection (executable, port, IP, etc).&lt;/p&gt;&lt;p&gt;With these options, you can choose multiple fields to filter connections for.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
               </property>
               <property name="text">
                <string>Filter connections also by:</string>
@@ -1681,7 +1681,7 @@ or a network socket: 127.0.0.1:50051</string>
               </property>
               <property name="toolTip">
                <string>This option configures the server workers. Each connected node consumes about 2 workers.
-If there're more nodes than workers, the GUI will not allow new messages from nodes until
+If there are more nodes than workers, the GUI will not allow new messages from nodes until
 you configure this option accordingly.</string>
               </property>
               <property name="text">
@@ -1900,7 +1900,7 @@ Set it to 0 to disable the limit.</string>
               </property>
               <property name="toolTip">
                <string>Every n milliseconds, the server will verify if the clients are alived.
-If we don't receive a response from a client in n milliseconds,
+If we do not receive a response from a client in n milliseconds,
 the Keepalive timeout timer will start to count.</string>
               </property>
               <property name="text">
@@ -2140,12 +2140,12 @@ that has stopped responding.</string>
           <item>
            <widget class="QCheckBox" name="checkUIRules">
             <property name="toolTip">
-             <string>When this option is selected, the rules of the selected duration won't be added to the list of temporary rules in the GUI.
+             <string>When this option is selected, the rules of the selected duration will not be added to the list of temporary rules in the GUI.
 
 Temporary rules will still be valid, and you can use them when prompted to allow/deny a new connection.</string>
             </property>
             <property name="text">
-             <string>Don't save/Delete rules of duration</string>
+             <string>Do not save/Delete rules of duration</string>
             </property>
            </widget>
           </item>
@@ -2307,7 +2307,7 @@ Temporary rules will still be valid, and you can use them when prompted to allow
             <item row="0" column="0">
              <widget class="QLabel" name="label_15">
               <property name="toolTip">
-               <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Address of the node.&lt;/p&gt;&lt;p&gt;Default: unix:///tmp/osui.sock (unix:// is mandatory if it's a Unix socket)&lt;/p&gt;&lt;p&gt;It can also be an IP address with the port: 127.0.0.1:50051&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+               <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Address of the node.&lt;/p&gt;&lt;p&gt;Default: unix:///tmp/osui.sock (unix:// is mandatory if it is a Unix socket)&lt;/p&gt;&lt;p&gt;It can also be an IP address with the port: 127.0.0.1:50051&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
               </property>
               <property name="text">
                <string>Address</string>
@@ -2336,7 +2336,7 @@ Temporary rules will still be valid, and you can use them when prompted to allow
             <item row="2" column="0">
              <widget class="QLabel" name="labelNodeDuration">
               <property name="toolTip">
-               <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;The default duration will take place when there's no UI connected.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+               <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;The default duration will take place when there is no UI connected.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
               </property>
               <property name="text">
                <string>Default duration</string>
@@ -2346,7 +2346,7 @@ Temporary rules will still be valid, and you can use them when prompted to allow
             <item row="1" column="0">
              <widget class="QLabel" name="label_10">
               <property name="toolTip">
-               <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;The default action will be applied to new outbound connections in two scenarios:&lt;/p&gt;&lt;p&gt;when the daemon is not connected to the UI, or when there's a pop-up running.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+               <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;The default action will be applied to new outbound connections in two scenarios:&lt;/p&gt;&lt;p&gt;when the daemon is not connected to the UI, or when there is a pop-up running.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
               </property>
               <property name="text">
                <string>Default action when the GUI is disconnected</string>
@@ -2400,7 +2400,7 @@ Temporary rules will still be valid, and you can use them when prompted to allow
             <item row="4" column="0">
              <widget class="QLabel" name="label_12">
               <property name="toolTip">
-               <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;If checked, OpenSnitch will prompt you to allow or deny connections that don't have an associated PID, due to several reasons, mostly due to bad state connections.&lt;/p&gt;&lt;p&gt;The pop-up dialog will only contain information about the network connection.&lt;/p&gt;&lt;p&gt;There're some scenarios where these are valid connections though, like when establishing a VPN using WireGuard.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+               <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;If checked, OpenSnitch will prompt you to allow or deny connections that do not have an associated PID, due to several reasons, mostly due to bad state connections.&lt;/p&gt;&lt;p&gt;The pop-up dialog will only contain information about the network connection.&lt;/p&gt;&lt;p&gt;There are some scenarios where these are valid connections though, like when establishing a VPN using WireGuard.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
               </property>
               <property name="text">
                <string>Debug invalid connections</string>
@@ -2613,7 +2613,7 @@ Temporary rules will still be valid, and you can use them when prompted to allow
               <item>
                <widget class="QCheckBox" name="checkNodeAuthSkipVerify">
                 <property name="text">
-                 <string>Don't verify certs</string>
+                 <string>Do not verify certs</string>
                 </property>
                </widget>
               </item>

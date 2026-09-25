@@ -8,27 +8,27 @@
 
 function print_map_proto
 {
-    case "$1" in
-        12001)
-            echo "------------------------------  TCP  ------------------------------"
-            ;;
-        12002)
-            echo "------------------------------ TCPv6 ------------------------------"
-            ;;
-        12003)
-            echo "------------------------------  UDP  ------------------------------"
-            ;;
-        12004)
-            echo "------------------------------ UDPv6 ------------------------------"
-            ;;
-    esac
+  case "$1" in
+    12001)
+      echo "------------------------------  TCP  ------------------------------"
+      ;;
+    12002)
+      echo "------------------------------ TCPv6 ------------------------------"
+      ;;
+    12003)
+      echo "------------------------------  UDP  ------------------------------"
+      ;;
+    12004)
+      echo "------------------------------ UDPv6 ------------------------------"
+      ;;
+  esac
 }
 
 function dump_map
 {
-    echo
-    print_map_proto $mid
-    bpftool map dump id $1 |awk '
+  echo
+  print_map_proto $mid
+  bpftool map dump id $1 | awk '
     BEGIN { total=0; }
     {
         split($0, line);
@@ -53,42 +53,42 @@ function dump_map
         }
     }
     END { printf("Total: %d\n", total); }'
-    print_map_proto $mid
+  print_map_proto $mid
 }
 
 if [ -z $1 ]; then
-    echo
-    echo "   Usage: bash debug-ebpf-maps.sh <proto> (tcp, tcpv6, udp or udpv6)"
-    echo
-    exit
+  echo
+  echo "   Usage: bash debug-ebpf-maps.sh <proto> (tcp, tcpv6, udp or udpv6)"
+  echo
+  exit
 fi
 if ! command -v bpftool; then
-    echo
-    echo "  [error] bpftool not found. Install it."
-    echo
-    exit
+  echo
+  echo "  [error] bpftool not found. Install it."
+  echo
+  exit
 fi
 
 mid=0
 case "$1" in
-    tcp)
-        mid=$(bpftool map list | grep -B 1 12001 | grep hash | cut -d: -f1)
-        ;;
-    tcpv6)
-        mid=$(bpftool map list | grep -B 1 12002 | grep hash | cut -d: -f1)
-        ;;
-    udp)
-        mid=$(bpftool map list | grep -B 1 12003 | grep hash | cut -d: -f1)
-        ;;
-    udpv6)
-        mid=$(bpftool map list | grep -B 1 12004 | grep hash | cut -d: -f1)
-        ;;
+  tcp)
+    mid=$(bpftool map list | grep -B 1 12001 | grep hash | cut -d: -f1)
+    ;;
+  tcpv6)
+    mid=$(bpftool map list | grep -B 1 12002 | grep hash | cut -d: -f1)
+    ;;
+  udp)
+    mid=$(bpftool map list | grep -B 1 12003 | grep hash | cut -d: -f1)
+    ;;
+  udpv6)
+    mid=$(bpftool map list | grep -B 1 12004 | grep hash | cut -d: -f1)
+    ;;
 esac
 if [ $mid -eq 0 ]; then
-    echo
-    echo "  [error] Invalid protocol ($1)"
-    echo
-    exit
+  echo
+  echo "  [error] Invalid protocol ($1)"
+  echo
+  exit
 fi
 
 dump_map $mid

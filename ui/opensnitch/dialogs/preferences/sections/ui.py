@@ -28,14 +28,12 @@ def load_themes(win):
     win.labelThemeError.setText("")
     win.comboUITheme.clear()
     win.comboUITheme.addItem(QC.translate("preferences", "System"), "System")
-    if win.themes.available():
-        themes = win.themes.list_themes()
-        for t in themes:
-            win.comboUITheme.addItem(os.path.basename(t), t)
-    else:
-        win.labelThemeError.setStyleSheet('color: red')
+    themes = win.themes.list_themes()
+    for t in themes:
+        win.comboUITheme.addItem(os.path.basename(t), t)
+    if not win.themes.qtmaterial_available():
         win.labelThemeError.setVisible(True)
-        win.labelThemeError.setText(QC.translate("preferences", "Themes not available. Install qt-material: pip3 install qt-material"))
+        win.labelThemeError.setText(QC.translate("preferences", "Install qt-material for more themes: pip3 install qt-material"))
 
     win.comboUITheme.setCurrentIndex(theme_idx)
     show_ui_density_widgets(win, theme_idx)
@@ -61,7 +59,8 @@ def show_ui_density_widgets(win, idx):
     """show ui density widget only for qt-material themes:
         https://github.com/UN-GCPDS/qt-material?tab=readme-ov-file#density-scale
     """
-    hidden = idx == 0
+    name = win.comboUITheme.itemData(idx)
+    hidden = idx == 0 or name in ("Light", "Dark")
     win.labelUIDensity.setHidden(hidden)
     win.spinUIDensity.setHidden(hidden)
     win.cmdUIDensityUp.setHidden(hidden)

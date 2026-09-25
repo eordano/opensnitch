@@ -99,13 +99,15 @@ func TestRuleLoaderInvalidRegexp(t *testing.T) {
 
 // Test rules of type operator.list. There're these scenarios:
 // - Enabled rules:
-//    * operator Data field is ignored if it contains the list of operators as json string.
-//    * the operarots list is expanded as json objecs under "list": []
+//   - operator Data field is ignored if it contains the list of operators as json string.
+//   - the operarots list is expanded as json objecs under "list": []
+//
 // For new rules (> v1.6.3), Data field will be empty.
 //
 // - Disabled rules
-//    * (old) the Data field contains the list of operators as json string, and the list of operarots is empty.
-//    * Data field empty, and the list of operators expanded.
+//   - (old) the Data field contains the list of operators as json string, and the list of operarots is empty.
+//   - Data field empty, and the list of operators expanded.
+//
 // In all cases the list of operators must be loaded.
 func TestRuleLoaderList(t *testing.T) {
 	l, err := NewLoader(true)

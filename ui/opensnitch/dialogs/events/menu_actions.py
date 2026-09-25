@@ -35,7 +35,7 @@ class MenuActions(views.ViewsManager):
 
     def table_menu_export_clipboard(self, cur_idx, model, selection):
         rules_list = []
-        if cur_idx == constants.TAB_RULES and self.fwTable.isVisible():
+        if self.fw_view_active(cur_idx):
             for idx in selection:
                 uuid = model.index(idx.row(), FirewallTableModel.COL_UUID).data()
                 node = model.index(idx.row(), FirewallTableModel.COL_ADDR).data()
@@ -72,10 +72,12 @@ class MenuActions(views.ViewsManager):
         QtWidgets.QApplication.clipboard().setText(cliptext)
 
     def table_menu_export_disk(self, cur_idx, model, selection):
+        if len(selection) == 1:
+            return self._save_rule_as(selection[0])
         outdir = QtWidgets.QFileDialog.getExistingDirectory(
             self,
+            QC.translate("stats", 'Select a directory to export the rules'),
             os.path.expanduser("~"),
-            QC.translate("stats", 'Select a directory to export rules'),
             QtWidgets.QFileDialog.Option.ShowDirsOnly | QtWidgets.QFileDialog.Option.DontResolveSymlinks
         )
         if outdir == "":
@@ -106,6 +108,35 @@ class MenuActions(views.ViewsManager):
                              "Error exporting the following rules:<br><br>".format(error_text)
                             ),
                 QtWidgets.QMessageBox.Icon.Warning)
+
+    def _save_rule_as(self, row):
+        """one rule: a file dialog preset to <rule name>.json"""
+        node_addr = row[constants.COL_R_NODE]
+        rule_name = row[constants.COL_R_NAME]
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            QC.translate("stats", "Save rule as"),
+            os.path.join(os.path.expanduser("~"), rule_name + ".json"),
+            QC.translate("stats", "Rule files (*.json)"))
+        if not path:
+            return
+        if not path.endswith(".json"):
+            path += ".json"
+        import tempfile, shutil
+        with tempfile.TemporaryDirectory() as tmp:
+            if not self.node_export_rule(node_addr, rule_name, tmp):
+                Message.ok(QC.translate("stats", "Rule export error"),
+                           QC.translate("stats", "The rule {0} could not be exported.").format(rule_name),
+                           QtWidgets.QMessageBox.Icon.Warning)
+                return
+            written = None
+            for base, _dirs, files in os.walk(tmp):
+                for f in files:
+                    if f.endswith(".json"):
+                        written = os.path.join(base, f)
+            if written is None:
+                return
+            shutil.move(written, path)
 
     def table_menu_duplicate(self, cur_idx, model, selection):
 
@@ -148,7 +179,7 @@ class MenuActions(views.ViewsManager):
                     self._rules.add_rules(node_addr, [rule])
                     self.save_ntf(nid, ntf)
 
-        elif cur_idx == constants.TAB_RULES and self.fwTable.isVisible():
+        elif self.fw_view_active(cur_idx):
             nodes_updated = []
             r_errs = []
             for idx in selection:
@@ -191,7 +222,7 @@ class MenuActions(views.ViewsManager):
                     self._rules.add_rules(addr, [rule])
                     self.save_ntf(nid, ntf)
 
-        elif cur_idx == constants.TAB_RULES and self.fwTable.isVisible():
+        elif self.fw_view_active(cur_idx):
             nodes_updated = []
             r_errs = []
             for idx in selection:
@@ -250,7 +281,7 @@ class MenuActions(views.ViewsManager):
                 nid = self.send_notification(node_addr, ntf, self._notification_callback)
                 if nid is not None:
                     self.save_ntf(nid, ntf)
-        elif cur_idx == constants.TAB_RULES and self.fwTable.isVisible():
+        elif self.fw_view_active(cur_idx):
             nodes_updated = []
             for idx in selection:
                 uuid = model.index(idx.row(), FirewallTableModel.COL_UUID).data()
@@ -290,7 +321,7 @@ class MenuActions(views.ViewsManager):
                 if nid is not None:
                     self.save_ntf(nid, ntf)
 
-        elif cur_idx == constants.TAB_RULES and self.fwTable.isVisible():
+        elif self.fw_view_active(cur_idx):
             nodes_updated = []
             for idx in selection:
                 uuid = model.index(idx.row(), FirewallTableModel.COL_UUID).data()
@@ -321,7 +352,7 @@ class MenuActions(views.ViewsManager):
         if ret == QtWidgets.QMessageBox.StandardButton.Cancel:
             return False
 
-        if cur_idx == constants.TAB_RULES and self.fwTable.isVisible():
+        if self.fw_view_active(cur_idx):
             nodes_updated = {}
             for idx in selection:
                 uuid = model.index(idx.row(), FirewallTableModel.COL_UUID).data()
@@ -395,7 +426,7 @@ class MenuActions(views.ViewsManager):
                 r.edit_rule(records, node)
                 break
 
-        elif cur_idx == constants.TAB_RULES and self.fwTable.isVisible():
+        elif self.fw_view_active(cur_idx):
             for idx in selection:
                 uuid = model.index(idx.row(), FirewallTableModel.COL_UUID).data()
                 node = model.index(idx.row(), FirewallTableModel.COL_ADDR).data()

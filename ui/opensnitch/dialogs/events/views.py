@@ -8,10 +8,13 @@ from PyQt6 import QtCore, QtWidgets
 from PyQt6.QtCore import QCoreApplication as QC
 
 from opensnitch.customwidgets.colorizeddelegate import ColorizedDelegate
+from opensnitch.customwidgets.addresstablemodel import AddressTableModel
+from opensnitch.utils import AsnDB, GeoDB
 from opensnitch.utils import (
     Message
 )
 from opensnitch.config import Config
+from opensnitch.utils.themes import Themes
 from .tasks import (
     nodemon
 )
@@ -82,6 +85,39 @@ class ViewsManager(config.ConfigManager, nodes.NodesManager, base.EventsBase):
     ):
 
         tableWidget.setSortingEnabled(True)
+        tableWidget.setAlternatingRowColors(True)
+        tableWidget.setStyleSheet(
+            "QTableView {"
+            "  gridline-color: palette(midlight);"
+            "  selection-background-color: rgba(0, 120, 215, 90);"
+            "  selection-color: palette(text);"
+            "}"
+            "QTableView::item {"
+            "  padding: 2px 6px;"
+            "}"
+            "QTableView::item:hover {"
+            "  background-color: rgba(0, 120, 215, 25);"
+            "}"
+            "QTableCornerButton::section { background: palette(window); border: none; border-bottom: 2px solid palette(mid); }"
+            "QTableView QHeaderView::section {"
+            "  background-color: palette(window);"
+            "  border: none;"
+            "  border-bottom: 2px solid palette(mid);"
+            "  border-right: 1px solid palette(midlight);"
+            "  padding: 5px 8px;"
+            "  font-weight: 600;"
+            "  font-size: 11px;"
+            "  text-align: left;"
+            "}"
+            "QTableView QHeaderView::section:hover {"
+            "  background-color: palette(midlight);"
+            "}"
+            "QTableView QHeaderView::section:pressed {"
+            "  background-color: palette(mid);"
+            "}"
+        )
+        tableWidget.horizontalHeader().setDefaultAlignment(
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
         if model is None:
             model = self._db.get_new_qsql_model()
         if verticalScrollBar is not None:
@@ -132,6 +168,7 @@ class ViewsManager(config.ConfigManager, nodes.NodesManager, base.EventsBase):
         self.rulesLabel.setText("")
         self.consLabel.setText("")
         self.droppedLabel.setText("")
+        self.statusLine.clear()
 
     def needs_refresh(self):
         diff = datetime.datetime.now() - self._last_update
@@ -184,7 +221,11 @@ class ViewsManager(config.ConfigManager, nodes.NodesManager, base.EventsBase):
         order_field = self.TABLES[cur_idx]['last_order_by']
         if field is not None:
             order_field  = field
-        return " ORDER BY %s %s" % (order_field, constants.SORT_ORDER[self.TABLES[cur_idx]['last_order_to']])
+        direction = constants.SORT_ORDER[self.TABLES[cur_idx]['last_order_to']]
+        if cur_idx in constants.SPLIT_VIEW_KEY and self.get_split_by(cur_idx) and str(order_field) != "1":
+            # The identifying key is the outer group; header sorts apply within it.
+            return " ORDER BY 1 ASC, %s %s" % (order_field, direction)
+        return " ORDER BY %s %s" % (order_field, direction)
 
     def get_view_config(self, idx):
         return self.TABLES[idx]
@@ -225,12 +266,12 @@ class ViewsManager(config.ConfigManager, nodes.NodesManager, base.EventsBase):
         if text == "":
             self.filterLine.setStyleSheet('')
         else:
-            self.filterLine.setStyleSheet('background-color: #55ff7f')
+            self.filterLine.setStyleSheet('background-color: %s' % Themes.success_bg_color())
 
     # https://stackoverflow.com/questions/40225270/copy-paste-multiple-items-from-qtableview-in-pyqt4
     def copy_selected_rows(self):
         cur_idx = self.get_current_view_idx()
-        if self.get_current_view_idx() ==  constants.TAB_RULES and self.fwTable.isVisible():
+        if self.fw_view_active():
             cur_idx =  constants.TAB_FIREWALL
         elif self.get_current_view_idx() ==  constants.TAB_RULES and not self.fwTable.isVisible():
             cur_idx =  constants.TAB_RULES
@@ -290,7 +331,7 @@ class ViewsManager(config.ConfigManager, nodes.NodesManager, base.EventsBase):
                 adv_filter
             )
 
-        elif cur_idx == constants.TAB_RULES and self.fwTable.isVisible():
+        elif self.fw_view_active(cur_idx):
             self.TABLES[constants.TAB_FIREWALL]['view'].filterByQuery(text)
             return
 
@@ -413,8 +454,8 @@ class ViewsManager(config.ConfigManager, nodes.NodesManager, base.EventsBase):
     def on_menu_node_export_clicked(self, triggered):
         outdir = QtWidgets.QFileDialog.getExistingDirectory(
             self,
-            os.path.expanduser("~"),
             QC.translate("stats", 'Select a directory to export rules'),
+            os.path.expanduser("~"),
             QtWidgets.QFileDialog.Option.ShowDirsOnly | QtWidgets.QFileDialog.Option.DontResolveSymlinks
         )
         if outdir == "":
@@ -437,8 +478,8 @@ class ViewsManager(config.ConfigManager, nodes.NodesManager, base.EventsBase):
     def on_menu_node_import_clicked(self, triggered):
         rulesdir = QtWidgets.QFileDialog.getExistingDirectory(
             self,
-            os.path.expanduser("~"),
             QC.translate("stats", 'Select a directory with rules to import (JSON files)'),
+            os.path.expanduser("~"),
             QtWidgets.QFileDialog.Option.ShowDirsOnly | QtWidgets.QFileDialog.Option.DontResolveSymlinks
         )
         if rulesdir == '':
@@ -469,8 +510,8 @@ class ViewsManager(config.ConfigManager, nodes.NodesManager, base.EventsBase):
     def on_menu_export_clicked(self, triggered):
         outdir = QtWidgets.QFileDialog.getExistingDirectory(
             self,
-            os.path.expanduser("~"),
             QC.translate("stats", 'Select a directory to export rules'),
+            os.path.expanduser("~"),
             QtWidgets.QFileDialog.Option.ShowDirsOnly | QtWidgets.QFileDialog.Option.DontResolveSymlinks
         )
         if outdir == "":
@@ -502,8 +543,8 @@ class ViewsManager(config.ConfigManager, nodes.NodesManager, base.EventsBase):
     def on_menu_import_clicked(self, triggered):
         rulesdir = QtWidgets.QFileDialog.getExistingDirectory(
            self,
-           os.path.expanduser("~"),
            QC.translate("stats", 'Select a directory with rules to import (JSON files)'),
+           os.path.expanduser("~"),
            QtWidgets.QFileDialog.Option.ShowDirsOnly | QtWidgets.QFileDialog.Option.DontResolveSymlinks
         )
         if rulesdir == '':
@@ -562,6 +603,8 @@ class ViewsManager(config.ConfigManager, nodes.NodesManager, base.EventsBase):
     def set_active_widgets(self, prev_idx, state, label_txt=""):
         cur_idx = self.get_current_view_idx()
         self.clear_rows_selection()
+        self.sync_split_model(cur_idx, detail=state)
+        self.update_split_control()
         if self.TABLES[cur_idx].get('label') is not None:
             self.TABLES[cur_idx]['label'].setVisible(state)
             self.TABLES[cur_idx]['label'].setText(label_txt)
@@ -610,14 +653,60 @@ class ViewsManager(config.ConfigManager, nodes.NodesManager, base.EventsBase):
         self.nodeRuleLabel.setText(node)
 
         self.alertsTable.setVisible(False)
-        self.fwTable.setVisible(False)
         self.rulesTable.setVisible(True)
         self.set_current_tab(cur_idx)
 
         return r_name, node
 
+    def fw_view_active(self, cur_idx=None):
+        """the firewall rules table is what the user is looking at"""
+        if cur_idx is None:
+            cur_idx = self.get_current_view_idx()
+        return cur_idx == constants.TAB_FIREWALL or \
+            (cur_idx == constants.TAB_RULES and self.fwTable.isVisible())
+
+    def update_view_actions(self):
+        """the buttons at the right of the filter bar: what this view can
+        export or import"""
+        idx = self.get_current_view_idx()
+        actions = []
+        view = self.TABLES.get(idx, {}).get('view')
+        model = view.model() if view is not None else None
+        rows = getattr(model, 'totalRowCount', model.rowCount() if model is not None else 0)
+        has_data = bool(rows)
+        raw_data = has_data
+        table = self.TABLES.get(idx, {}).get('name')
+        if table:
+            from PyQt6.QtSql import QSqlQuery
+            query = QSqlQuery(self._db_sqlite)
+            if query.exec("SELECT 1 FROM " + table + " LIMIT 1"):
+                raw_data = query.next()
+            query.finish()
+        show_filter = raw_data or bool(self.filterBar.chips()) or bool(self.filterBar.text())
+        self.filterBar._input.setVisible(show_filter)
+        self.filterBar._search_icon.setVisible(show_filter)
+        if idx == constants.TAB_RULES:
+            actions.append((
+                QC.translate("stats", "New rule..."),
+                QC.translate("stats", "Opens the rule editor with an empty application rule."),
+                self._cb_new_rule_clicked))
+            actions.append((
+                QC.translate("stats", "Import rules..."),
+                QC.translate("stats", "Loads the rules found in a directory of JSON files into a node."),
+                lambda: self.on_menu_import_clicked(False)))
+            actions.append((
+                QC.translate("stats", "Export rules..."),
+                QC.translate("stats", "Saves the rules of every node as JSON files in a directory."),
+                lambda: self.on_menu_export_clicked(False)))
+        if has_data:
+            actions.append((
+                QC.translate("stats", "Export CSV..."),
+                QC.translate("stats", "Saves the rows of this view as a CSV file."),
+                lambda i=idx: self.on_menu_export_csv_clicked(i)))
+        self.filterBar.setActions(actions)
+
     def get_active_table(self):
-        if self.get_current_view_idx() == constants.TAB_RULES and self.fwTable.isVisible():
+        if self.fw_view_active():
             return self.TABLES[constants.TAB_FIREWALL]['view']
         elif self.get_current_view_idx() == constants.TAB_RULES and self.alertsTable.isVisible():
             return self.TABLES[constants.TAB_ALERTS]['view']
@@ -626,14 +715,212 @@ class ViewsManager(config.ConfigManager, nodes.NodesManager, base.EventsBase):
 
     def refresh_active_table(self):
         cur_idx = self.get_current_view_idx()
+        if cur_idx == constants.TAB_FIREWALL:
+            self.TABLES[cur_idx]['view'].refresh()
+            return
         model = self.get_active_table().model()
-        lastQuery = model.query().lastQuery()
-        if "LIMIT" not in lastQuery:
+        if cur_idx in constants.SPLIT_VIEW_KEY and not self.in_detail_view(cur_idx):
+            self.apply_split(cur_idx)
+        else:
+            lastQuery = model.query().lastQuery()
+            if " LIMIT " in lastQuery:
+                lastQuery = lastQuery.split(" LIMIT ")[0]
             lastQuery += self.get_view_limit()
-        self.queries.setQuery(model, lastQuery, limit=self.get_query_limit())
-        #else:
-        #    model.refresh()
+            self.queries.setQuery(model, lastQuery, limit=self.get_query_limit())
         self.TABLES[cur_idx]['view'].refresh()
+
+    # --- split by: extra grouping columns on the summary views
+
+    def _split_setting(self, idx, key):
+        return "{0}_{1}".format(key, self.TABLES[idx]['name'])
+
+    def get_split_by(self, idx):
+        if idx not in constants.SPLIT_VIEW_KEY:
+            return []
+        path = self._split_setting(idx, Config.STATS_SPLIT_BY)
+        if self.cfg.settings.contains(path):
+            keys = [str(k) for k in self.cfg.getList(path, [])]
+        else:
+            keys = list(constants.SPLIT_DEFAULTS.get(idx, []))
+        own = constants.SPLIT_VIEW_KEY[idx]
+        return [k for k, _, _ in constants.SPLIT_DIMENSIONS if k in keys and k != own]
+
+    def set_split_by(self, idx, keys):
+        self.cfg.setSettings(self._split_setting(idx, Config.STATS_SPLIT_BY), [str(k) for k in keys])
+
+    def get_enrichment(self, idx):
+        path = self._split_setting(idx, Config.STATS_SHOW_ENRICHMENT)
+        if self.cfg.settings.contains(path):
+            keys = [str(k) for k in self.cfg.getList(path, [])]
+        else:
+            keys = [k for k, _ in constants.ENRICH_COLUMNS]
+        return [k for k, _ in constants.ENRICH_COLUMNS if k in keys]
+
+    def set_enrichment(self, idx, keys):
+        self.cfg.setSettings(self._split_setting(idx, Config.STATS_SHOW_ENRICHMENT), [str(k) for k in keys])
+
+    def split_ip_column(self, idx, split):
+        """index of the column holding an IP in the summary query, or None"""
+        if constants.SPLIT_VIEW_KEY.get(idx) == "ip":
+            return constants.COL_WHAT
+        if "ip" in split:
+            return 2 + split.index("ip")
+        return None
+
+    def available_enrichers(self):
+        out = []
+        for key, label in constants.ENRICH_COLUMNS:
+            if key == "asn" and (AsnDB.instance().is_available() or GeoDB.instance().has_asn()):
+                out.append((key, QC.translate("stats", label)))
+            elif key == "country" and GeoDB.instance().has_country():
+                out.append((key, QC.translate("stats", label)))
+        return out
+
+    def sync_split_model(self, idx, detail=False):
+        """point the view's model at the IP column to enrich (none in detail view)"""
+        if idx not in constants.SPLIT_VIEW_KEY:
+            return False
+        model = self.TABLES[idx]['view'].model()
+        if not isinstance(model, AddressTableModel):
+            return False
+        if detail:
+            return model.setEnrichment(None, [])
+        split = self.get_split_by(idx)
+        ipcol = self.split_ip_column(idx, split)
+        keys = [k for k, _ in self.available_enrichers() if k in self.get_enrichment(idx)]
+        return model.setEnrichment(ipcol, keys)
+
+    def view_anchor(self, idx):
+        """the key (first column) of the top visible row, or of the current
+        row when one is selected: what the person is looking at"""
+        view = self.TABLES[idx]['view']
+        model = view.model()
+        row = 0
+        sel = view.selectionModel()
+        if sel is not None:
+            selected = sel.selectedRows()
+            cur = sel.currentIndex()
+            if selected:
+                row = selected[0].row()
+            elif cur.isValid() and sel.isSelected(cur):
+                row = cur.row()
+        if model.rowCount() == 0:
+            return None
+        value = model.index(min(row, model.rowCount() - 1), 0).data()
+        return None if value is None else str(value)
+
+    def offset_of_key(self, model, qstr, key, cap=50000):
+        """row number of the first row whose first column equals `key` in
+        the ordered query, or None"""
+        if key is None:
+            return None
+        base, _ = model._split_limit(qstr)
+        q = model._exec(base)
+        n = 0
+        while q.next() and n < cap:
+            v = q.value(0)
+            if v is not None and str(v) == key:
+                return n
+            n += 1
+        return None
+
+    def clamp_view_order(self, idx):
+        """the sort column must exist in the query about to run: the key,
+        hits, then one column per grouping dimension"""
+        ncols = 2 + len(self.get_split_by(idx))
+        try:
+            order_by = int(str(self.TABLES[idx]['last_order_by']).split(",")[0])
+        except ValueError:
+            return
+        if order_by > ncols:
+            self.TABLES[idx]['last_order_by'] = "1"
+            header = self.TABLES[idx]['view'].horizontalHeader()
+            header.blockSignals(True)
+            header.setSortIndicator(0, QtCore.Qt.SortOrder(self.TABLES[idx]['last_order_to']))
+            header.blockSignals(False)
+
+    def apply_split(self, idx, offset=None):
+        """rebuild the summary query of a view from its split settings"""
+        view = self.TABLES[idx]['view']
+        model = view.model()
+        columns = model.columnCount()
+        self.sync_split_model(idx)
+        qstr = self.queries.get_view_query(model, idx)
+        self.queries.setQuery(model, qstr, limit=self.get_query_limit(), offset=offset)
+        if model.columnCount() != columns:
+            view._columns_auto_fitted = False
+        if idx == self.get_current_view_idx():
+            self.filterBar.setSplitCount(model.totalRowCount if self.get_split_by(idx) else None)
+
+    @staticmethod
+    def _sql_text(value):
+        return "'" + str(value).replace("'", "''") + "'"
+
+    def split_dimension_stats(self, row_pairs=None):
+        """for the Group by menu: how many rows the view would have with each
+        dimension toggled, and how many distinct values it holds under the
+        current filter. With `row_pairs` ([(key, value)] of one row) the
+        counts are for that row only: how many rows it would become."""
+        idx = self.get_current_view_idx()
+        if idx not in constants.SPLIT_VIEW_KEY or self.in_detail_view(idx):
+            return {}
+        model = self.TABLES[idx]['view'].model()
+        base = getattr(model, "baseQueryStr", "") or ""
+        conditions = []
+        if "FROM connections AS c" in base and " WHERE " in base:
+            tail = base.split(" WHERE ", 1)[1]
+            for stop in (" GROUP BY ", " ORDER BY "):
+                if stop in tail:
+                    tail = tail.split(stop, 1)[0]
+            conditions.append("(" + tail.strip() + ")")
+        cols = {k: col for k, _, col in constants.SPLIT_DIMENSIONS}
+        for key, value in (row_pairs or []):
+            col = cols.get(key)
+            if col is None or value is None:
+                continue
+            text = str(value)
+            if key == "uid" and text.endswith(")") and "(" in text:
+                text = text.rsplit("(", 1)[1][:-1]
+            conditions.append(f"c.{col} = {self._sql_text(text)}")
+        where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+        split = list(self.get_split_by(idx))
+        own = constants.SPLIT_VIEW_KEY[idx]
+        stats = {}
+        from PyQt6 import QtSql
+        with self._lock:
+            for key, label, col in constants.SPLIT_DIMENSIONS:
+                if key == own:
+                    continue
+                toggled = [k for k in split if k != key] if key in split else split + [key]
+                grouped = self.queries.get_split_query(idx, toggled, where or None)
+                rows = distinct = None
+                sample = ""
+                q = QtSql.QSqlQuery(self._db_sqlite)
+                if q.exec(f"SELECT count(*) FROM ({grouped})") and q.next():
+                    rows = int(q.value(0) or 0)
+                q = QtSql.QSqlQuery(self._db_sqlite)
+                if q.exec(f"SELECT count(DISTINCT c.{col}), MIN(c.{col}) FROM connections AS c{where}") and q.next():
+                    distinct = int(q.value(0) or 0)
+                    sample = q.value(1)
+                stats[key] = (rows, distinct, "" if sample is None else str(sample))
+        return stats
+
+    def update_split_control(self):
+        """sync the filter bar's split button with the current view"""
+        idx = self.get_current_view_idx()
+        show = idx in constants.SPLIT_VIEW_KEY and not self.in_detail_view(idx)
+        self.filterBar.setSplitVisible(show)
+        if not show:
+            return
+        own = constants.SPLIT_VIEW_KEY[idx]
+        dims = [(k, QC.translate("stats", label)) for k, label, _ in constants.SPLIT_DIMENSIONS if k != own]
+        split = self.get_split_by(idx)
+        enrichers = []
+        if self.split_ip_column(idx, split) is not None:
+            enrichers = self.available_enrichers()
+        self.filterBar.blockSignals(True)
+        self.filterBar.setSplitOptions(dims, split, enrichers, self.get_enrichment(idx))
+        self.filterBar.blockSignals(False)
 
     def restore_scroll_value(self):
         if self.LAST_SCROLL_VALUE is None:
@@ -754,4 +1041,4 @@ class ViewsManager(config.ConfigManager, nodes.NodesManager, base.EventsBase):
             self._update_status_label(running=True, text=self.FIREWALL_RUNNING)
         else:
             self._update_status_label(running=False, text=self.FIREWALL_STOPPED)
-            self.statusLabel.setStyleSheet('color: red; margin: 5px')
+            self.statusLabel.setStyleSheet('color: %s; margin: 5px' % Themes.error_color())

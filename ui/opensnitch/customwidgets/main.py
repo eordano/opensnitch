@@ -18,8 +18,9 @@ class ColorizedQSqlQueryModel(QSqlQueryModel):
                 }
             )
     """
-    RED   = QColor(QtCore.Qt.red)
-    GREEN = QColor(QtCore.Qt.green)
+    # material tones readable on both light and dark palettes
+    RED   = QColor("#e53935")
+    GREEN = QColor("#43a047")
 
     def __init__(self, modelData={}):
         QSqlQueryModel.__init__(self)

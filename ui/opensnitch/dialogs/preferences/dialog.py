@@ -8,7 +8,7 @@ from PyQt6.QtCore import QCoreApplication as QC
 from opensnitch.config import Config
 from opensnitch.nodes import Nodes
 from opensnitch.database import Database
-from opensnitch.customwidgets.itemwidgetcentered import IconTextItem
+from . import design
 from opensnitch.utils import (
     Icons,
     logger,
@@ -39,16 +39,16 @@ class PreferencesDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
     _notification_callback = QtCore.pyqtSignal(str, ui_pb2.NotificationReply)
     saved = QtCore.pyqtSignal()
 
-    TAB_POPUPS = 0
-    TAB_UI = 1
-    TAB_SERVER = 2
-    TAB_RULES = 3
-    TAB_NODES = 4
-    TAB_DB = 5
+    TAB_UI = design.PAGE_GENERAL
+    TAB_POPUPS = design.PAGE_PROMPTS
+    TAB_RULES = design.PAGE_PROMPTS
+    TAB_NODES = design.PAGE_NODES
+    TAB_SERVER = design.PAGE_SERVER
+    TAB_DB = design.PAGE_STORAGE
 
-    NODE_PAGE_GENERAL = 0
-    NODE_PAGE_LOGGING = 1
-    NODE_PAGE_AUTH = 2
+    NODE_PAGE_GENERAL = design.NODE_TAB_BEHAVIOUR
+    NODE_PAGE_LOGGING = design.NODE_TAB_LOGGING
+    NODE_PAGE_AUTH = design.NODE_TAB_SECURITY
 
     SUM = 1
     REST = 0
@@ -158,53 +158,16 @@ class PreferencesDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         self.comboServerLogLevel.addItem("WARNING", logging.WARNING)
         self.comboServerLogLevel.addItem("ERROR", logging.ERROR)
 
-        leftOpts = [
-            {
-                'icon': Icons.new(self, 'pop-ups'),
-                'text': QC.translate('preferences', 'Pop-ups')
-            },
-            {
-                'icon': Icons.new(self, 'window-new'),
-                'text': QC.translate('preferences', 'UI')
-            },
-            {
-                'icon': Icons.new(self, 'network-server'),
-                'text': QC.translate('preferences', 'Server')
-            },
-            {
-                'icon': Icons.new(self, 'format-justify-fill'),
-                'text': QC.translate('preferences', 'Rules')
-            },
-            {
-                'icon': Icons.new(self, 'computer'),
-                'text': QC.translate('preferences', 'Nodes')
-            },
-            {
-                'icon': Icons.new(self, 'drive-harddisk'),
-                'text': QC.translate('preferences', 'Database')
-            }
-        ]
-        self.listWidget.setIconSize(QtCore.QSize(64, 64))
-        for opt in leftOpts:
-            item = QtWidgets.QListWidgetItem(self.listWidget)
-            widget = IconTextItem(opt['icon'], opt['text'], size=24)
-            item.setSizeHint(QtCore.QSize(64, 64))
-            widget.setSizePolicy(
-                QtWidgets.QSizePolicy.Policy.Maximum,
-                QtWidgets.QSizePolicy.Policy.Expanding
-            )
-            self.listWidget.addItem(item)
-            self.listWidget.setItemWidget(item, widget)
+        design.build(self)
 
         self.listWidget.itemClicked.connect(self.cb_list_item_activated)
+        self.listWidget.currentRowChanged.connect(self.cb_page_changed)
         cmdNodeCorner = QtWidgets.QPushButton("", objectName="cmdNodeCorner")
         cmdNodeCorner.setFlat(True)
         cmdNodeCorner.setIcon(Icons.new(parent, "document-save"))
         cmdNodeCorner.setToolTip(QC.translate("preferences", "Save these settings"))
         cmdNodeCorner.setVisible(False)
         self.tabNodeWidget.setCornerWidget(cmdNodeCorner)
-        w = self.splitter.width()
-        self.splitter.setSizes([int(w/3), w])
 
     def showEvent(self, event):
         super(PreferencesDialog, self).showEvent(event)
@@ -381,8 +344,28 @@ class PreferencesDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
     def cb_cancel_button_clicked(self):
         self.reject()
 
+    def reject(self):
+        if not self.settle_node_changes():
+            return
+        super().reject()
+
+    def cb_page_changed(self, row):
+        if self.stackedWidget.currentIndex() == self.TAB_NODES and row != self.TAB_NODES:
+            if not self.settle_node_changes():
+                self.listWidget.blockSignals(True)
+                self.listWidget.setCurrentRow(self.TAB_NODES)
+                self.listWidget.blockSignals(False)
+                return
+        self.stackedWidget.setCurrentIndex(row)
+
     def cb_help_button_clicked(self):
-        utils.show_help()
+        from .tour import SettingsTour
+        previous = getattr(self, "_settings_tour", None)
+        if previous is not None:
+            previous.close()
+            previous.deleteLater()
+        self._settings_tour = SettingsTour(self)
+        self._settings_tour.start()
 
     def cb_popups_check_toggled(self, checked):
         if self.loading_settings:
@@ -392,9 +375,32 @@ class PreferencesDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         if not checked:
             self.spinUITimeout.setValue(20)
 
+    def settle_node_changes(self):
+        """pending node edits would be lost: ask, and return False to stay put"""
+        if self.loading_settings or not self.node_needs_update:
+            return True
+        answer = utils.ask_node_changes(self)
+        if answer == "cancel":
+            return False
+        if answer == "apply":
+            settings.save_nodes_config(self)
+        self.node_needs_update = False
+        return True
+
     def cb_node_combo_changed(self, index):
         if self.loading_settings:
             return
+        prev = getattr(self, "_node_combo_prev", 0)
+        if self.node_needs_update and prev != index:
+            self.comboNodes.blockSignals(True)
+            self.comboNodes.setCurrentIndex(prev)
+            proceed = self.settle_node_changes()
+            if proceed:
+                self.comboNodes.setCurrentIndex(index)
+            self.comboNodes.blockSignals(False)
+            if not proceed:
+                return
+        self._node_combo_prev = index
         section_nodes.load_node_settings(self)
 
     def cb_node_needs_update(self):

@@ -1,7 +1,7 @@
 import os
 import stat
 from PyQt6.QtCore import QCoreApplication as QC
-from PyQt6 import QtWidgets
+from PyQt6 import QtWidgets, QtGui
 
 from opensnitch.config import Config
 from opensnitch.utils import (
@@ -105,11 +105,52 @@ def config_server_auth_type(win, idx):
     win.lineCertFile.setEnabled(idx >= win.AUTH_TLS_SIMPLE)
     win.lineCertKeyFile.setEnabled(idx >= win.AUTH_TLS_SIMPLE)
 
+def no_nodes_message():
+    """the status shown while no daemon is connected, with a pointer to what a node is"""
+    return QC.translate(
+        "preferences",
+        "No nodes are connected: no OpenSnitch daemon has reached this application yet. "
+        "A node is a machine running the daemon whose firewall this application controls. "
+        "<a href=\"{0}Nodes\">What is a node?</a>"
+    ).format(Config.HELP_URL)
+
+
+def ask_node_changes(win):
+    """pending node settings are about to be lost: 'apply', 'discard' or 'cancel'"""
+    from . import sections
+    if win.checkApplyToNodes.isChecked():
+        who, them = QC.translate("preferences", "all nodes"), QC.translate("preferences", "them")
+    else:
+        addr = sections.nodes.get_node_addr(win)
+        name = win.nodes.get_node_hostname(addr) if addr else ""
+        who = name or addr or QC.translate("preferences", "this node")
+        them = QC.translate("preferences", "it")
+    box = QtWidgets.QMessageBox(win)
+    box.setIcon(QtWidgets.QMessageBox.Icon.Question)
+    box.setWindowTitle(QC.translate("preferences", "Node settings changed"))
+    box.setText(QC.translate("preferences", "You have modified some settings for {0}.").format(who))
+    box.setInformativeText(QC.translate("preferences", "Would you like to apply these settings to {0} now?").format(them))
+    apply_btn = box.addButton(QC.translate("preferences", "Apply now"), QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+    discard_btn = box.addButton(QC.translate("preferences", "Discard changes"), QtWidgets.QMessageBox.ButtonRole.DestructiveRole)
+    discard_btn.setStyleSheet("color: #da4453; font-weight: 600;")
+    discard_btn.setIcon(QtGui.QIcon.fromTheme("edit-delete"))
+    cancel_btn = box.addButton(QC.translate("preferences", "Cancel (continue editing)"), QtWidgets.QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(apply_btn)
+    box.setEscapeButton(cancel_btn)
+    box.exec()
+    clicked = box.clickedButton()
+    if clicked is apply_btn:
+        return "apply"
+    if clicked is discard_btn:
+        return "discard"
+    return "cancel"
+
+
 def show_help():
     QuickHelp.show(
         QC.translate(
             "preferences",
-            "Hover the mouse over the texts to display the help<br><br>Don't forget to visit the wiki: <a href=\"{0}\">{0}</a>"
+            "Hover over a setting to read what it does. The Wiki button opens the documentation: <a href=\"{0}\">{0}</a>"
         ).format(Config.HELP_URL)
     )
 

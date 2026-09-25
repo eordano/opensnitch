@@ -12,7 +12,7 @@ def load(win):
 
     if len(win.node_list) == 0:
         reset_node_settings(win)
-        utils.set_status_message(win, QC.translate("preferences", "There're no nodes connected"))
+        utils.set_status_message(win, utils.no_nodes_message())
 
     showNodes = len(win.node_list) > 1
     win.comboNodes.setVisible(showNodes)

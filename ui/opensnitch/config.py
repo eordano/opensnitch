@@ -84,7 +84,7 @@ class Config:
         DURATION_12h,
         DURATION_UNTIL_RESTART]
 
-    DEFAULT_DURATION_IDX = 6 # until restart
+    DEFAULT_DURATION_IDX = 6 # 12h (the prompt combo gained 12h; until reboot is 7, forever 8)
 
     POPUP_CENTER = 0
     POPUP_TOP_RIGHT = 1
@@ -109,6 +109,11 @@ class Config:
     DEFAULT_POPUP_ADVANCED_DSTPORT = "global/default_popup_advanced_dstport"
     DEFAULT_POPUP_ADVANCED_UID = "global/default_popup_advanced_uid"
     DEFAULT_POPUP_ADVANCED_CHECKSUM = "global/default_popup_advanced_checksum"
+    DEFAULT_POPUP_ADVANCED_DSTHOST = "global/default_popup_advanced_dsthost"
+    DEFAULT_POPUP_ADVANCED_CMD = "global/default_popup_advanced_cmd"
+    DEFAULT_POPUP_ADVANCED_ARGS = "global/default_popup_advanced_args"
+    DEFAULT_POPUP_ADVANCED_PID = "global/default_popup_advanced_pid"
+    DEFAULT_POPUP_SAVE_RULE = "global/default_popup_save_rule"
     DEFAULT_FW_INTERCEPTION_ENABLED = "global/interception_enabled"
     DEFAULT_PERSIST_INTERCEPTION_STATE = "global/persist_interception_state"
     DEFAULT_SERVER_ADDR  = "global/server_address"
@@ -146,6 +151,8 @@ class Config:
     STATS_FILTER_ACTION = "statsDialog/general_filter_action"
     STATS_LIMIT_RESULTS = "statsDialog/general_limit_results"
     STATS_SHOW_COLUMNS = "statsDialog/show_columns"
+    STATS_SPLIT_BY = "statsDialog/split_by"
+    STATS_SHOW_ENRICHMENT = "statsDialog/show_enrichment"
     STATS_NODES_COL_STATE = "statsDialog/nodes_columns_state"
     STATS_GENERAL_COL_STATE = "statsDialog/general_columns_state"
     STATS_GENERAL_FILTER_TEXT = "statsDialog/"
@@ -158,11 +165,14 @@ class Config:
     STATS_RULES_TREE_EXPANDED_1 = "statsDialog/rules_tree_1_expanded"
     STATS_RULES_SPLITTER_POS = "statsDialog/rules_splitter_pos"
     STATS_NODES_SPLITTER_POS = "statsDialog/nodes_splitter_pos"
+    STATS_SIDEBAR_SPLITTER_POS = "statsDialog/sidebar_splitter_pos"
     STATS_VIEW_COL_STATE =  "statsDialog/view_columns_state"
     STATS_VIEW_DETAILS_COL_STATE =  "statsDialog/view_details_columns_state"
     STATS_NETSTAT_FILTER_PROTO = "statsDialog/netstat_proto_filter"
     STATS_NETSTAT_FILTER_FAMILY = "statsDialog/netstat_family_filter"
     STATS_NETSTAT_FILTER_STATE = "statsDialog/netstat_state_filter"
+    STATS_NETSTAT_INTERVAL = "statsDialog/netstat_interval"
+    STATS_EVENTS_SPLITTER_POS = "statsDialog/events_splitter_pos"
 
     QT_PLATFORM_PLUGIN = "global/qt_platform_plugin"
     QT_AUTO_SCREEN_SCALE_FACTOR = "global/screen_scale_factor_auto"
@@ -216,8 +226,18 @@ class Config:
     def hasKey(self, key):
         return self.settings.contains(key)
 
+    _sync_pending = False
+
     def setSettings(self, path, value):
+        """write now, flush once: sync() rewrites the whole file, and a
+        dialog closing writes dozens of keys in a row"""
         self.settings.setValue(path, value)
+        if not self._sync_pending:
+            self._sync_pending = True
+            QtCore.QTimer.singleShot(0, self.flush)
+
+    def flush(self):
+        self._sync_pending = False
         self.settings.sync()
 
     def getSettings(self, path, default=None):

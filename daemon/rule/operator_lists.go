@@ -400,7 +400,7 @@ func wildcardSuffix(host string) string {
 // Known limitation: '{www,api}.example.org' alternation syntax is NOT
 // supported. path.Match treats '{' as a literal. Such patterns are not
 // detected here and fall through to the exact-map lookup where they will
-// never match – a silent false negative. Use separate list entries instead.
+// never match - a silent false negative. Use separate list entries instead.
 func isDomainGlobPattern(host string) bool {
 	if wildcardSuffix(host) != "" {
 		return false

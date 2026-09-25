@@ -14,6 +14,7 @@ from slugify import slugify
 
 from opensnitch.database.enums import RuleFieldNames
 from opensnitch.utils import Icons, logger
+from opensnitch.utils.themes import Themes
 from opensnitch.desktop_parser import LinuxDesktopParser
 from opensnitch.config import Config
 from opensnitch.version import version
@@ -82,14 +83,14 @@ class PromptDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
 
         self._apps_parser = LinuxDesktopParser()
 
-        self.whatIPCombo.setVisible(False)
-        self.checkDstIP.setVisible(False)
-        self.checkDstPort.setVisible(False)
-        self.checkUserID.setVisible(False)
         self.appDescriptionLabel.setVisible(False)
 
-        self._ischeckAdvanceded = False
-        self.checkAdvanced.toggled.connect(self._check_advanced_toggled)
+        self._ischeckAdvanceded = True
+        self._ctrl_once_engaged = False
+        self._saved_duration_idx = 0
+        self._con = None
+        self.checkAdvanced.setVisible(False)
+        self._rebuild_rule_grid()
 
         self.checkAdvanced.clicked.connect(self._button_clicked)
         self.durationCombo.activated.connect(self._button_clicked)
@@ -125,6 +126,7 @@ class PromptDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
 
         self.allowButton.clicked.connect(lambda: self._on_action_clicked(Config.ACTION_ALLOW_IDX))
         self.allowButton.setIcon(self.allowIcon)
+        self.allowButton.setToolTip("Allow (Enter)")
         self._allow_text = QC.translate("popups", "Allow")
         self._action_text = [
             QC.translate("popups", "Drop"),
@@ -133,25 +135,417 @@ class PromptDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         ]
         self._action_icon = [denyIcon, self.allowIcon, rejectIcon]
 
-        m = QtWidgets.QMenu()
-        m.addAction(denyIcon, self._action_text[Config.ACTION_DROP_IDX]).triggered.connect(
-            lambda: self._on_action_clicked(Config.ACTION_DROP_IDX)
-        )
-        m.addAction(rejectIcon, self._action_text[Config.ACTION_REJECT_IDX]).triggered.connect(
-            lambda: self._on_action_clicked(Config.ACTION_REJECT_IDX)
-        )
-        self.actionButton.setMenu(m)
+        self.actionButton.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.DelayedPopup)
+        self.actionButton.setMenu(None)
         self.actionButton.setText(self._action_text[Config.ACTION_DROP_IDX])
         self.actionButton.setIcon(self._action_icon[Config.ACTION_DROP_IDX])
         if self._default_action != Config.ACTION_ALLOW_IDX:
             self.actionButton.setText(self._action_text[self._default_action])
             self.actionButton.setIcon(self._action_icon[self._default_action])
         self.actionButton.clicked.connect(self._on_deny_btn_clicked)
+        self.actionButton.setToolTip("Drop (Esc)")
+        self.durationCombo.setToolTip("Duration (Ctrl+Tab to cycle)")
 
-    def _cb_label_clicked(self, what):
-        if self._ischeckAdvanceded is False:
+        bar = self.horizontalLayout
+        while bar.count():
+            item = bar.takeAt(0)
+            w = item.widget()
+            if w and w not in (self.actionButton, self.allowButton):
+                w.setParent(None)
+        bar.addWidget(self.actionButton, 1)
+        bar.addWidget(self.allowButton, 1)
+        self.actionButton.setMinimumHeight(32)
+        self.allowButton.setMinimumHeight(32)
+        self.actionButton.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
+        self.actionButton.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly)
+
+        # One stylesheet for the whole dialog; Qt applies it to children created
+        # after this call too, so widget setup below only tags a promptRole.
+        self.setStyleSheet(Themes.prompt_stylesheet())
+
+        self._preview_label = QtWidgets.QLabel(self)
+        self._preview_label.setWordWrap(True)
+        self._preview_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self._preview_label.setProperty("promptRole", "preview")
+        self._preview_label.setProperty("once", "false")
+        layout = self.stackedWidget.widget(constants.PAGE_MAIN).layout()
+        if layout is not None:
+            layout.addWidget(self._preview_label)
+
+        self.whatCombo.activated.connect(self._update_preview)
+        self.durationCombo.activated.connect(self._update_preview)
+        self.checkDstPort.toggled.connect(lambda _: self._update_preview())
+        self.checkUserID.toggled.connect(lambda _: self._update_preview())
+
+    def _update_preview(self, _idx=None):
+        if self._con is None:
+            self._preview_label.setText("")
             return
 
+        action = self._action_text[self._default_action]
+        app_name = os.path.basename(self._con.process_path) or "this process"
+        duration_text = self.durationCombo.currentText()
+
+        # Build user-friendly constraint descriptions
+        dest_parts = []
+        if self.checkDstHost.isChecked():
+            host_val = self.hostCombo.currentText() if self.hostCombo.isVisible() else self._con.dst_host
+            dest_parts.append('<b>%s</b>' % host_val)
+        elif self.checkDstIP.isChecked():
+            dest_parts.append('<b>%s</b>' % self._con.dst_ip)
+        if self.checkDstPort.isChecked():
+            dest_parts.append('port <b>%s</b>' % self._con.dst_port)
+        if self.checkProtocol.isChecked():
+            proto_val = self.protocolCombo.currentText() if self.protocolCombo.isVisible() else self._con.protocol
+            dest_parts.append('via <b>%s</b>' % proto_val.upper())
+
+        source_parts = []
+        if self.checkCmdline.isChecked():
+            source_parts.append('from <b>%s</b>' % utils.collapse_nix_hash(self._con.process_path))
+        if self.checkArgs.isChecked():
+            args = ' '.join(self._con.process_args[1:]) if len(self._con.process_args) > 1 else ""
+            if args:
+                source_parts.append('when arguments match <b>%s</b>' % args)
+        if self.checkUserID.isChecked():
+            uid_text = self.uidLabel.text() or str(self._con.user_id)
+            source_parts.append('from user <b>%s</b>' % uid_text)
+        if self.checkPID.isChecked():
+            source_parts.append('from PID <b>%s</b>' % self._con.process_id)
+
+        deny_text = self._action_text[Config.ACTION_REJECT_IDX] if self.checkReject.isChecked() else self._action_text[Config.ACTION_DROP_IDX]
+        action_pair = 'Allow/%s' % deny_text
+
+        if self._ctrl_once_engaged or not self.checkSaveRule.isChecked():
+            self._preview_label.setText(
+                '%s this one connection from <b>%s</b> -- no rule saved' % (action_pair, app_name)
+            )
+            return
+
+        sentence = '%s connections from <b>%s</b>' % (action_pair, app_name)
+        if dest_parts:
+            sentence += ' to %s' % ', '.join(dest_parts)
+        if source_parts:
+            sentence += ' %s' % ', '.join(source_parts)
+        sentence += ' <b>%s</b>' % duration_text
+
+        self._preview_label.setText(sentence)
+
+    def _rebuild_rule_grid(self):
+        """Replace the flat details grid with a symmetric 3-column rule builder.
+
+        Layout per row:
+            from-value  |  ☐left  LABEL  ☐right  |  to-value
+        Checkboxes on the side that makes sense:
+            IP   -- right (destination)
+            PORT -- right (destination)
+            USER -- left  (source)
+            HASH -- left  (source)
+        """
+        old_layout = self.gridLayout_2
+        page = old_layout.parentWidget()
+
+        while old_layout.count():
+            item = old_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.setParent(None)
+
+        QtWidgets.QWidget().setLayout(old_layout)
+
+        ROW_HEIGHT = 26
+
+        grid = QtWidgets.QGridLayout()
+        grid.setContentsMargins(8, 6, 8, 2)
+        grid.setVerticalSpacing(4)
+        grid.setHorizontalSpacing(4)
+
+        # Columns: 0=from-value  1=☐left  2=label  3=☐right  4=to-value
+        grid.setColumnStretch(0, 3)
+        grid.setColumnStretch(1, 0)
+        grid.setColumnStretch(2, 2)
+        grid.setColumnStretch(3, 0)
+        grid.setColumnStretch(4, 3)
+
+        # Style via the promptRole property, never setObjectName: _left/_right
+        # are handed widgets that came from res/prompt.ui, whose object names
+        # are used elsewhere and must survive.
+        def _left(w):
+            w.setProperty("promptRole", "value")
+            w.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
+            return w
+
+        def _right(w):
+            w.setProperty("promptRole", "value")
+            w.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
+            return w
+
+        def _center(text):
+            lbl = QtWidgets.QLabel(text)
+            lbl.setProperty("promptRole", "header")
+            # Qt Style Sheets support neither text-transform nor letter-spacing,
+            # so the header's small-caps look has to come from the font. It was
+            # declared in QSS before and silently ignored.
+            font = lbl.font()
+            font.setCapitalization(QtGui.QFont.Capitalization.AllUppercase)
+            font.setLetterSpacing(QtGui.QFont.SpacingType.AbsoluteSpacing, 2)
+            lbl.setFont(font)
+            lbl.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+            return lbl
+
+        def _dash(align_right=True):
+            d = QtWidgets.QLabel("--")
+            d.setProperty("promptRole", "dash")
+            flag = QtCore.Qt.AlignmentFlag.AlignRight if align_right else QtCore.Qt.AlignmentFlag.AlignLeft
+            d.setAlignment(flag | QtCore.Qt.AlignmentFlag.AlignVCenter)
+            return d
+
+        def _row_right_check(label_text, check_widget, left_widget, right_widget):
+            nonlocal row
+            grid.setRowMinimumHeight(row, ROW_HEIGHT)
+            grid.addWidget(left_widget, row, 0)
+            grid.addWidget(QtWidgets.QWidget(), row, 1)
+            grid.addWidget(_center(label_text), row, 2)
+            grid.addWidget(check_widget, row, 3)
+            grid.addWidget(right_widget, row, 4)
+            row += 1
+
+        def _row_left_check(label_text, check_widget, left_widget, right_widget):
+            nonlocal row
+            grid.setRowMinimumHeight(row, ROW_HEIGHT)
+            grid.addWidget(left_widget, row, 0)
+            grid.addWidget(check_widget, row, 1)
+            grid.addWidget(_center(label_text), row, 2)
+            grid.addWidget(QtWidgets.QWidget(), row, 3)
+            grid.addWidget(right_widget, row, 4)
+            row += 1
+
+        def _row_no_check(label_text, left_widget, right_widget=None):
+            nonlocal row
+            grid.setRowMinimumHeight(row, ROW_HEIGHT)
+            grid.addWidget(left_widget, row, 0)
+            grid.addWidget(QtWidgets.QWidget(), row, 1)
+            grid.addWidget(_center(label_text), row, 2)
+            grid.addWidget(QtWidgets.QWidget(), row, 3)
+            grid.addWidget(right_widget or QtWidgets.QWidget(), row, 4)
+            row += 1
+
+        row = 0
+
+        # Hide the old whatCombo -- CMD/ARGS checkboxes replace it
+        self.whatCombo.setVisible(False)
+
+        # -- CMD: command path ☐ | CMD | ☐ arguments --
+        self.checkCmdline = QtWidgets.QCheckBox()
+        self.checkArgs = QtWidgets.QCheckBox()
+        self.cmdLabel = QtWidgets.QLabel("")
+        self.argsGridLabel = QtWidgets.QLabel("")
+        self.argsGridLabel.setWordWrap(True)
+
+        grid.setRowMinimumHeight(row, ROW_HEIGHT)
+        grid.addWidget(_left(self.cmdLabel), row, 0)
+        grid.addWidget(self.checkCmdline, row, 1)
+        grid.addWidget(_center("COMMAND"), row, 2)
+        grid.addWidget(self.checkArgs, row, 3)
+        grid.addWidget(_right(self.argsGridLabel), row, 4)
+        row += 1
+
+        self.checkCmdline.toggled.connect(lambda _: self._update_preview())
+        self.checkArgs.toggled.connect(lambda _: self._update_preview())
+
+        # -- PID: pid value | ☐ PID | -- --
+        self.checkPID = QtWidgets.QCheckBox()
+        self.pidLabel = QtWidgets.QLabel("")
+        _row_left_check("PROCESS", self.checkPID, _left(self.pidLabel), _dash(False))
+        self.checkPID.toggled.connect(lambda _: self._update_preview())
+
+        # -- HASH: checksum-value | ☐ HASH | -- --
+        self.checksumLabel.setTextInteractionFlags(
+            QtCore.Qt.TextInteractionFlag.TextSelectableByMouse | QtCore.Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        self.checksumLblCheck.setVisible(False)
+        self._hashRowIdx = row
+        _row_left_check("HASH", self.checkSum, _left(self.checksumLabel), _dash(False))
+
+        # -- HOST: -- | HOST ☐ | hostname combo --
+        self.checkDstHost = QtWidgets.QCheckBox()
+        self.dstHostLabel = QtWidgets.QLabel("")
+        self.hostCombo = QtWidgets.QComboBox()
+        self.hostCombo.setVisible(False)
+
+        host_right = QtWidgets.QWidget()
+        host_right_layout = QtWidgets.QHBoxLayout(host_right)
+        host_right_layout.setContentsMargins(0, 0, 0, 0)
+        host_right_layout.setSpacing(0)
+        host_right_layout.addWidget(_right(self.dstHostLabel))
+        host_right_layout.addWidget(self.hostCombo)
+
+        _row_right_check("HOST", self.checkDstHost, _dash(), host_right)
+        self.checkDstHost.toggled.connect(self._on_host_check_toggled)
+
+        # -- IP: sourceIP | IP ☐ | destIP combo --
+        self.ipCombo = QtWidgets.QComboBox()
+        self.ipCombo.setVisible(False)
+
+        ip_right = QtWidgets.QWidget()
+        ip_right_layout = QtWidgets.QHBoxLayout(ip_right)
+        ip_right_layout.setContentsMargins(0, 0, 0, 0)
+        ip_right_layout.setSpacing(0)
+        ip_right_layout.addWidget(_right(self.destIPLabel))
+        ip_right_layout.addWidget(self.ipCombo)
+
+        _row_right_check("IP", self.checkDstIP, _left(self.sourceIPLabel), ip_right)
+        self.checkDstIP.toggled.connect(self._on_ip_check_toggled)
+        self.whatIPCombo.setVisible(False)
+        self.dstIPLblCheck.setVisible(False)
+
+        # Mutual exclusion: HOST <-> IP
+        self.checkDstHost.toggled.connect(self._on_host_toggled)
+        self.checkDstIP.toggled.connect(self._on_ip_toggled)
+
+        # -- PORT: -- | PORT ☐ | port-value --
+        _row_right_check("PORT", self.checkDstPort, _dash(), _right(self.destPortLabel))
+        self.dstPortLblCheck.setVisible(False)
+
+        # -- PROTO: -- | PROTO ☐ | protocol combo --
+        self.checkProtocol = QtWidgets.QCheckBox()
+        self.protocolCombo = QtWidgets.QComboBox()
+        self.protocolCombo.addItems(["tcp", "udp", "tcp6", "udp6", "udplite", "udplite6", "icmp", "icmp6", "sctp", "sctp6"])
+        self.protocolCombo.setVisible(False)
+        self.protocolLabel = QtWidgets.QLabel("")
+
+        proto_right = QtWidgets.QWidget()
+        proto_right_layout = QtWidgets.QHBoxLayout(proto_right)
+        proto_right_layout.setContentsMargins(0, 0, 0, 0)
+        proto_right_layout.setSpacing(0)
+        proto_right_layout.addWidget(_right(self.protocolLabel))
+        proto_right_layout.addWidget(self.protocolCombo)
+
+        _row_right_check("PROTO", self.checkProtocol, _dash(), proto_right)
+        self.checkProtocol.toggled.connect(self._on_proto_check_toggled)
+
+        # -- USER: uid-value | ☐ USER | -- --
+        _row_left_check("USER", self.checkUserID, _left(self.uidLabel), _dash(False))
+        self.userLblCheck.setVisible(False)
+
+        # -- WORK DIR: cwd-value | WORK DIR | -- --
+        _row_no_check("FROM DIR", _left(self.cwdLabel))
+        self.label_2.setVisible(False)
+
+        # -- BEHAVIOR: ☐ Drop | DENY | Reject ☐ --
+        self.checkDrop = QtWidgets.QCheckBox()
+        self.checkReject = QtWidgets.QCheckBox()
+        self._dropLabel = QtWidgets.QLabel("Drop")
+        self._rejectLabel = QtWidgets.QLabel("Reject")
+        _left(self._dropLabel)
+        _right(self._rejectLabel)
+
+        grid.setRowMinimumHeight(row, ROW_HEIGHT)
+        grid.addWidget(self._dropLabel, row, 0)
+        grid.addWidget(self.checkDrop, row, 1)
+        grid.addWidget(_center("ACTION"), row, 2)
+        grid.addWidget(self.checkReject, row, 3)
+        grid.addWidget(self._rejectLabel, row, 4)
+        row += 1
+
+        self.checkDrop.setChecked(True)
+        self.checkDrop.toggled.connect(lambda c: self._on_deny_mode_toggled(c, self.checkDrop, self.checkReject, Config.ACTION_DROP_IDX))
+        self.checkReject.toggled.connect(lambda c: self._on_deny_mode_toggled(c, self.checkReject, self.checkDrop, Config.ACTION_REJECT_IDX))
+
+        # -- RULE: ☐ RULE | duration combo or "once (no rule)" --
+        self.checkSaveRule = QtWidgets.QCheckBox()
+        self.checkSaveRule.setChecked(True)
+        self.checkSaveRule.setToolTip("Uncheck to allow/deny once without saving a rule")
+        self._ruleOnceLabel = QtWidgets.QLabel("once (no rule)")
+        self._ruleOnceLabel.setProperty("promptRole", "once")
+        self._ruleOnceLabel.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
+        self._ruleOnceLabel.setVisible(False)
+
+        rule_right = QtWidgets.QWidget()
+        rule_right_layout = QtWidgets.QHBoxLayout(rule_right)
+        rule_right_layout.setContentsMargins(0, 0, 0, 0)
+        rule_right_layout.setSpacing(0)
+        self.durationCombo.setParent(None)
+        rule_right_layout.addWidget(self.durationCombo)
+        rule_right_layout.addWidget(self._ruleOnceLabel)
+
+        _row_right_check("ADD RULE", self.checkSaveRule, QtWidgets.QWidget(), rule_right)
+        self.checkSaveRule.toggled.connect(self._on_save_rule_toggled)
+
+        self._ruleGrid = grid
+
+        page_layout = page.layout()
+        if page_layout:
+            page_layout.addLayout(grid, page_layout.rowCount(), 0)
+        else:
+            new_layout = QtWidgets.QVBoxLayout(page)
+            new_layout.addLayout(grid)
+
+    _DURATION_LABELS = {
+        "once": "once",
+        "30s": "for 30 seconds",
+        "5m": "for 5 minutes",
+        "15m": "for 15 minutes",
+        "30m": "for 30 minutes",
+        "1h": "for 1 hour",
+        "12h": "for 12 hours",
+        "until reboot": "until reboot",
+        "forever": "forever",
+    }
+
+    def _rewrite_duration_labels(self):
+        for i in range(self.durationCombo.count()):
+            raw = self.durationCombo.itemText(i)
+            friendly = self._DURATION_LABELS.get(raw, raw)
+            if friendly != raw:
+                self.durationCombo.setItemText(i, friendly)
+
+    def _on_deny_mode_toggled(self, checked, own_check, other_check, action_idx):
+        if checked and other_check.isChecked():
+            other_check.blockSignals(True)
+            other_check.setChecked(False)
+            other_check.blockSignals(False)
+        if not checked and not other_check.isChecked():
+            own_check.setChecked(True)
+            return
+        if checked:
+            self._default_action = action_idx
+            self.actionButton.setText(self._action_text[action_idx])
+            self.actionButton.setIcon(self._action_icon[action_idx])
+        self._update_preview()
+
+    def _on_save_rule_toggled(self, checked):
+        self.durationCombo.setVisible(checked)
+        self._ruleOnceLabel.setVisible(not checked)
+        self._update_preview()
+
+    def _on_host_check_toggled(self, checked):
+        self.dstHostLabel.setVisible(not checked)
+        self.hostCombo.setVisible(checked)
+
+    def _on_ip_check_toggled(self, checked):
+        self.destIPLabel.setVisible(not checked)
+        self.ipCombo.setVisible(checked)
+
+    def _on_proto_check_toggled(self, checked):
+        self.protocolLabel.setVisible(not checked)
+        self.protocolCombo.setVisible(checked)
+        self._update_preview()
+
+    def _on_host_toggled(self, checked):
+        if checked and self.checkDstIP.isChecked():
+            self.checkDstIP.blockSignals(True)
+            self.checkDstIP.setChecked(False)
+            self.checkDstIP.blockSignals(False)
+        self._update_preview()
+
+    def _on_ip_toggled(self, checked):
+        if checked and self.checkDstHost.isChecked():
+            self.checkDstHost.blockSignals(True)
+            self.checkDstHost.setChecked(False)
+            self.checkDstHost.blockSignals(False)
+        self._update_preview()
+
+    def _cb_label_clicked(self, what):
         if what == constants.DSTIP_LBL_CLICKED:
             self.checkDstIP.toggle()
         elif what == constants.DSTPORT_LBL_CLICKED:
@@ -283,6 +677,7 @@ class PromptDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         self.whatIPCombo.setVisible(state)
         self.destIPLabel.setVisible(not state)
         self.checkDstPort.setVisible(state == True and (self._con is not None and self._con.dst_port != 0))
+        self.checkProtocol.setVisible(state)
         self.checkUserID.setVisible(state)
         self.checkSum.setVisible(self._con.process_checksums[Config.OPERAND_PROCESS_HASH_MD5] != "" and state)
         self.checksumLblCheck.setVisible(self._con.process_checksums[Config.OPERAND_PROCESS_HASH_MD5] != "" and state)
@@ -319,7 +714,7 @@ class PromptDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
 
             rule, error = check_sums.update_rule(self._peer, self._rules, comboRule, self._con)
             if rule is None:
-                self.labelChecksumStatus.setStyleSheet('color: red')
+                self.labelChecksumStatus.setStyleSheet('color: %s' % Themes.error_color())
                 self.labelChecksumStatus.setText("✘ " + error)
                 return
 
@@ -332,7 +727,7 @@ class PromptDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
                     rules=[rule]
                 )
             )
-            self.labelChecksumStatus.setStyleSheet('color: green')
+            self.labelChecksumStatus.setStyleSheet('color: %s' % Themes.ok_color())
             self.labelChecksumStatus.setText("✔" + QC.translate("popups", "Rule updated."))
 
     def _cb_cmdback_clicked(self):
@@ -376,6 +771,9 @@ class PromptDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         if self._tick == 0:
             self._timeout_trigger.emit()
             return
+        if self._tick < 0:
+            # no countdown: the prompt waits for the user
+            return
 
         while self._tick > 0 and self._done.is_set() is False:
             t = threading.currentThread()
@@ -397,12 +795,13 @@ class PromptDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         self.stackedWidget.setCurrentIndex(constants.PAGE_MAIN)
         self.reset_widgets()
         self._render_connection(self._con)
-        if self._tick > 0:
+        if self._tick != 0:
             self.show()
         # render details after displaying the pop-up.
 
         self._display_checksums_warning(self._peer, self._con)
         details.render(self._peer, self.connDetails, self._con)
+        self._update_preview()
 
     @QtCore.pyqtSlot()
     def on_tick_triggered(self):
@@ -423,6 +822,7 @@ class PromptDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         self.sourceIPLabel.setText("")
         self.destIPLabel.setText("")
         self.destPortLabel.setText("")
+        self.protocolLabel.setText("")
         self.uidLabel.setText("")
         self.checksumLabel.setText("")
         self.labelChecksumStatus.setText("")
@@ -432,13 +832,14 @@ class PromptDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
 
     def _set_cmd_action_text(self):
         action_idx = self._cfg.getInt(self._cfg.DEFAULT_ACTION_KEY)
+        countdown = " ({0}s)".format(self._tick) if self._tick > 0 else ""
         if action_idx == Config.ACTION_ALLOW_IDX:
-            self.allowButton.setText("{0} ({1})".format(self._allow_text, self._tick))
+            self.allowButton.setText(self._allow_text + countdown)
             self.allowButton.setIcon(self.allowIcon)
             self.actionButton.setText(self._action_text[Config.ACTION_DROP_IDX])
         else:
             self.allowButton.setText(self._allow_text)
-            self.actionButton.setText("{0} ({1})".format(self._action_text[action_idx], self._tick))
+            self.actionButton.setText(self._action_text[action_idx] + countdown)
             self.actionButton.setIcon(self._action_icon[action_idx])
 
     def _display_checksums_warning(self, peer, con):
@@ -532,16 +933,54 @@ class PromptDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
 
         self.sourceIPLabel.setText(con.src_ip)
         self.destIPLabel.setText(con.dst_ip)
+        has_host = con.dst_host != "" and con.dst_host != con.dst_ip
+        self.dstHostLabel.setText(con.dst_host if has_host else "")
+        self._hide_widget(self.checkDstHost, not has_host)
+        self._hide_widget(self.dstHostLabel, not has_host)
+        self.hostCombo.clear()
+        if has_host:
+            self.hostCombo.addItem(con.dst_host)
+            parts = con.dst_host.split('.')
+            for i in range(1, len(parts) - 1):
+                self.hostCombo.addItem("*.%s" % '.'.join(parts[i:]))
+        self.hostCombo.setVisible(False)
+
+        self.ipCombo.clear()
+        self.ipCombo.addItem(con.dst_ip)
+        parts = con.dst_ip.split('.')
+        if len(parts) == 4:
+            import ipaddress
+            for i in range(1, len(parts)):
+                self.ipCombo.addItem("%s.*" % '.'.join(parts[:i]))
+            for cidr in [24, 16, 8]:
+                net = str(ipaddress.ip_network(con.dst_ip + "/%d" % cidr, strict=False))
+                self.ipCombo.addItem(net)
+            alias = NetworkAliases.get_alias(con.dst_ip)
+            if alias:
+                self.ipCombo.addItem(alias)
+        self.ipCombo.setVisible(False)
+
         if con.dst_port == 0:
             self.destPortLabel.setText("")
         else:
             self.destPortLabel.setText(str(con.dst_port))
         self._hide_widget(self.destPortLabel, con.dst_port == 0)
-        self._hide_widget(self.checkSum, con.process_checksums[Config.OPERAND_PROCESS_HASH_MD5] == "" or not self._ischeckAdvanceded)
-        self._hide_widget(self.checksumLabel, con.process_checksums[Config.OPERAND_PROCESS_HASH_MD5] == "" or not self._ischeckAdvanceded)
-        self._hide_widget(self.checksumLblCheck, con.process_checksums[Config.OPERAND_PROCESS_HASH_MD5] == "" or not self._ischeckAdvanceded)
-        self._hide_widget(self.dstPortLblCheck, con.dst_port == 0)
-        self._hide_widget(self.checkDstPort, con.dst_port == 0 or not self._ischeckAdvanceded)
+
+        self.protocolLabel.setText(con.protocol)
+        idx = self.protocolCombo.findText(con.protocol, QtCore.Qt.MatchFlag.MatchFixedString)
+        if idx >= 0:
+            self.protocolCombo.setCurrentIndex(idx)
+        self.protocolCombo.setVisible(False)
+        self.checkProtocol.setChecked(False)
+        no_hash = con.process_checksums[Config.OPERAND_PROCESS_HASH_MD5] == ""
+        for col in range(5):
+            item = self._ruleGrid.itemAtPosition(self._hashRowIdx, col)
+            if item and item.widget():
+                item.widget().setVisible(not no_hash)
+        self.checksumLabel.setTextInteractionFlags(
+            QtCore.Qt.TextInteractionFlag.TextSelectableByMouse | QtCore.Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        self._hide_widget(self.checkDstPort, con.dst_port == 0)
 
         if self._local:
             try:
@@ -570,16 +1009,44 @@ class PromptDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         utils.add_dst_networks_to_combo(self.whatIPCombo, con.dst_ip)
 
         self._default_action = self._cfg.getInt(self._cfg.DEFAULT_ACTION_KEY)
+        is_reject = self._default_action == Config.ACTION_REJECT_IDX
+        self.checkDrop.setChecked(not is_reject)
+        self.checkReject.setChecked(is_reject)
         utils.set_default_duration(self._cfg, self.durationCombo)
+        self._rewrite_duration_labels()
 
         utils.set_default_target(self.whatCombo, con, self._cfg, app_name, app_args)
+
+        if len(con.process_args) > 0:
+            cmd_path = con.process_args[0]
+            cmd_args = ' '.join(con.process_args[1:])
+        else:
+            cmd_path = ""
+            cmd_args = ""
+        self.cmdLabel.setText(utils.truncate_text(utils.collapse_nix_hash(cmd_path), 40))
+        self.cmdLabel.setToolTip(cmd_path)
+        self.argsGridLabel.setText(utils.truncate_text(cmd_args, 50) if cmd_args else "--")
+        self.argsGridLabel.setToolTip(cmd_args)
+        self._hide_widget(self.cmdLabel, cmd_path == "")
+        self._hide_widget(self.checkCmdline, cmd_path == "")
+        self._hide_widget(self.argsGridLabel, cmd_args == "")
+        self._hide_widget(self.checkArgs, cmd_args == "")
+
+        self.pidLabel.setText(str(con.process_id))
+        self._hide_widget(self.pidLabel, int(con.process_id) <= 0)
+        self._hide_widget(self.checkPID, int(con.process_id) <= 0)
+
+        save_rule = self._cfg.getBool(self._cfg.DEFAULT_POPUP_SAVE_RULE) if self._cfg.hasKey(self._cfg.DEFAULT_POPUP_SAVE_RULE) else True
+        self.checkSaveRule.setChecked(save_rule)
 
         self.checkDstIP.setChecked(self._cfg.getBool(self._cfg.DEFAULT_POPUP_ADVANCED_DSTIP))
         self.checkDstPort.setChecked(self._cfg.getBool(self._cfg.DEFAULT_POPUP_ADVANCED_DSTPORT))
         self.checkUserID.setChecked(self._cfg.getBool(self._cfg.DEFAULT_POPUP_ADVANCED_UID))
         self.checkSum.setChecked(self._cfg.getBool(self._cfg.DEFAULT_POPUP_ADVANCED_CHECKSUM))
-        if self._cfg.getBool(self._cfg.DEFAULT_POPUP_ADVANCED):
-            self.checkAdvanced.toggle()
+        self.checkDstHost.setChecked(self._cfg.getBool(self._cfg.DEFAULT_POPUP_ADVANCED_DSTHOST))
+        self.checkCmdline.setChecked(self._cfg.getBool(self._cfg.DEFAULT_POPUP_ADVANCED_CMD))
+        self.checkArgs.setChecked(self._cfg.getBool(self._cfg.DEFAULT_POPUP_ADVANCED_ARGS))
+        self.checkPID.setChecked(self._cfg.getBool(self._cfg.DEFAULT_POPUP_ADVANCED_PID))
 
         self._set_cmd_action_text()
         self.checkAdvanced.setFocus()
@@ -588,10 +1055,63 @@ class PromptDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
 
         self._post_popup_plugins(con)
 
-    # https://gis.stackexchange.com/questions/86398/how-to-disable-the-escape-key-for-a-dialog
     def keyPressEvent(self, event):
-        if not event.key() == QtCore.Qt.Key.Key_Escape:
-            super(PromptDialog, self).keyPressEvent(event)
+        key = event.key()
+        mods = event.modifiers()
+        ctrl = bool(mods & QtCore.Qt.KeyboardModifier.ControlModifier)
+
+        if key == QtCore.Qt.Key.Key_Return or key == QtCore.Qt.Key.Key_Enter:
+            self._on_action_clicked(Config.ACTION_ALLOW_IDX)
+            return
+
+        if key == QtCore.Qt.Key.Key_Escape:
+            self._on_deny_btn_clicked(None)
+            return
+
+        if key == QtCore.Qt.Key.Key_Tab and ctrl:
+            idx = (self.durationCombo.currentIndex() + 1) % self.durationCombo.count()
+            self.durationCombo.setCurrentIndex(idx)
+            self.stop_countdown()
+            self._update_preview()
+            return
+
+        if key == QtCore.Qt.Key.Key_Control:
+            self._ctrl_once_engaged = True
+            self._saved_duration_idx = self.durationCombo.currentIndex()
+            self.durationCombo.setCurrentIndex(0)
+            self._update_once_visuals(True)
+            self._update_preview()
+            return
+
+        super(PromptDialog, self).keyPressEvent(event)
+
+    def keyReleaseEvent(self, event):
+        if event.key() == QtCore.Qt.Key.Key_Control:
+            self._ctrl_once_engaged = False
+            if hasattr(self, '_saved_duration_idx'):
+                self.durationCombo.setCurrentIndex(self._saved_duration_idx)
+            self._update_once_visuals(False)
+            self._update_preview()
+            return
+        super(PromptDialog, self).keyReleaseEvent(event)
+
+    def _update_once_visuals(self, once_mode):
+        # Dynamic property drives the QLabel#promptPreview[once="true"] rule in
+        # the dialog stylesheet. Qt only re-evaluates selectors on repolish, so
+        # the unpolish/polish pair is required for the change to show.
+        self._preview_label.setProperty("once", "true" if once_mode else "false")
+        self._preview_label.style().unpolish(self._preview_label)
+        self._preview_label.style().polish(self._preview_label)
+        if once_mode:
+            self.allowButton.setText("%s (once)" % self._allow_text)
+            self.actionButton.setText("%s (once)" % self._action_text[self._default_action])
+            self.whatCombo.setEnabled(False)
+            self.durationCombo.setEnabled(False)
+        else:
+            self._set_cmd_action_text()
+            self.allowButton.setText(self._allow_text)
+            self.whatCombo.setEnabled(True)
+            self.durationCombo.setEnabled(True)
 
     # prevent a click on the window's x
     # from quitting the whole application
@@ -614,19 +1134,47 @@ class PromptDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
             self._default_action = Config.ACTION_DROP_IDX
         self._send_rule()
 
+    # uint32(-1): the daemon's UserId when the socket owner is unknown too.
+    _UNKNOWN_UID = 0xFFFFFFFF
+
+    def _unknown_process_operator(self):
+        """Operand/data pair for a connection with no process path."""
+        if 0 <= self._con.user_id < self._UNKNOWN_UID:
+            return Config.OPERAND_USER_ID, str(self._con.user_id)
+        if self._con.dst_host and self._con.dst_host != self._con.dst_ip:
+            return Config.OPERAND_DEST_HOST, self._con.dst_host
+        if self._con.dst_ip:
+            return Config.OPERAND_DEST_IP, self._con.dst_ip
+        return None
+
     def _is_list_rule(self):
         return self.checkUserID.isChecked() or \
             self.checkDstPort.isChecked() or \
             self.checkDstIP.isChecked() or \
+            self.checkDstHost.isChecked() or \
+            self.checkCmdline.isChecked() or \
+            self.checkArgs.isChecked() or \
+            self.checkPID.isChecked() or \
             self.checkSum.isChecked()
+
+    def _save_checkbox_prefs(self):
+        self._cfg.setSettings(self._cfg.DEFAULT_POPUP_ADVANCED_DSTHOST, self.checkDstHost.isChecked())
+        self._cfg.setSettings(self._cfg.DEFAULT_POPUP_ADVANCED_CMD, self.checkCmdline.isChecked())
+        self._cfg.setSettings(self._cfg.DEFAULT_POPUP_ADVANCED_ARGS, self.checkArgs.isChecked())
+        self._cfg.setSettings(self._cfg.DEFAULT_POPUP_ADVANCED_PID, self.checkPID.isChecked())
+        self._cfg.setSettings(self._cfg.DEFAULT_POPUP_SAVE_RULE, self.checkSaveRule.isChecked())
 
     def _send_rule(self):
         try:
             self._cfg.setSettings("promptDialog/geometry", self.saveGeometry())
+            self._save_checkbox_prefs()
             self._rule = ui_pb2.Rule(name="user.choice")
             self._rule.created = int(datetime.now().timestamp())
             self._rule.enabled = True
-            self._rule.duration = utils.get_duration(self.durationCombo.currentIndex())
+            if not self.checkSaveRule.isChecked():
+                self._rule.duration = Config.DURATION_ONCE
+            else:
+                self._rule.duration = utils.get_duration(self.durationCombo.currentIndex())
 
             self._rule.action = Config.ACTION_ALLOW
             if self._default_action == Config.ACTION_DROP_IDX:
@@ -635,72 +1183,109 @@ class PromptDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
             elif self._default_action == Config.ACTION_REJECT_IDX:
                 self._rule.action = Config.ACTION_REJECT
 
-            what_idx = self.whatCombo.currentIndex()
-            self._rule.operator.type, self._rule.operator.operand, self._rule.operator.data = utils.get_combo_operator(
-                self.whatCombo.itemData(what_idx),
-                self.whatCombo.currentText(),
-                self._con)
-            if self._rule.operator.data == "":
-                self.logger.debug("popups: Invalid rule, discarding: %s", repr(self._rule))
-                self._rule = None
-                return
+            if self._con.process_path.startswith(constants.APPIMAGE_PREFIX):
+                _, _, appimage_data = utils.get_combo_operator(constants.FIELD_APPIMAGE, "", self._con)
+                self._rule.operator.type = Config.RULE_TYPE_REGEXP
+                self._rule.operator.operand = Config.OPERAND_PROCESS_PATH
+                self._rule.operator.data = appimage_data
+                self._rule.operator.sensitive = True
+            elif self._con.process_path.startswith(constants.SNAP_PREFIX):
+                _, _, snap_data = utils.get_combo_operator(constants.FIELD_SNAP, "", self._con)
+                self._rule.operator.type = Config.RULE_TYPE_REGEXP
+                self._rule.operator.operand = Config.OPERAND_PROCESS_PATH
+                self._rule.operator.data = snap_data
+                self._rule.operator.sensitive = True
+            else:
+                self._rule.operator.type = Config.RULE_TYPE_SIMPLE
+                self._rule.operator.operand = Config.OPERAND_PROCESS_PATH
+                self._rule.operator.data = self._con.process_path
+            unknown_process = self._rule.operator.data == ""
+            if unknown_process:
+                # InterceptUnknown: the daemon saw the socket but could not
+                # attribute it to a binary (pid 0, empty path). Key the rule on
+                # what it does know instead of discarding the user's answer.
+                fallback = self._unknown_process_operator()
+                if fallback is None:
+                    self.logger.debug("popups: Invalid rule, discarding: %s", repr(self._rule))
+                    self._rule = None
+                    return
+                self._rule.operator.operand, self._rule.operator.data = fallback
 
             rule_temp_name = utils.get_rule_name(self._rule, self._is_list_rule())
+            if unknown_process:
+                rule_temp_name = slugify("%s %s unknown-process %s %s" % (
+                    self._rule.action, self._rule.duration,
+                    self._rule.operator.operand, self._rule.operator.data))
             self._rule.name = rule_temp_name
 
-            # TODO: move to a method
-            data=[]
+            data = []
 
-            alias_selected = False
+            if self.checkDstHost.isChecked() and self._con.dst_host and self._con.dst_host != self._con.dst_ip:
+                host_val = self.hostCombo.currentText() if self.hostCombo.isVisible() else self._con.dst_host
+                if host_val.startswith("*."):
+                    dsthost = r'\.'.join(host_val[2:].split('.')).replace("*", "")
+                    dsthost = r'^(|.*\.)%s$' % dsthost
+                    data.append({"type": Config.RULE_TYPE_REGEXP, "operand": Config.OPERAND_DEST_HOST, "data": dsthost, "sensitive": True})
+                else:
+                    data.append({"type": Config.RULE_TYPE_SIMPLE, "operand": Config.OPERAND_DEST_HOST, "data": host_val})
+                rule_temp_name = slugify("%s %s" % (rule_temp_name, host_val))
+            elif self.checkDstIP.isChecked():
+                ip_val = self.ipCombo.currentText() if self.ipCombo.isVisible() else self._con.dst_ip
+                if '/' in ip_val:
+                    data.append({"type": Config.RULE_TYPE_NETWORK, "operand": Config.OPERAND_DEST_NETWORK, "data": ip_val})
+                elif '*' in ip_val:
+                    ip_re = r'\.'.join(ip_val.split('.')).replace("*", ".*")
+                    data.append({"type": Config.RULE_TYPE_REGEXP, "operand": Config.OPERAND_DEST_IP, "data": ip_re, "sensitive": True})
+                else:
+                    data.append({"type": Config.RULE_TYPE_SIMPLE, "operand": Config.OPERAND_DEST_IP, "data": ip_val})
+                rule_temp_name = slugify("%s %s" % (rule_temp_name, ip_val))
 
-            if self.whatCombo.itemData(what_idx) == constants.FIELD_DST_NETWORK:
-                alias = NetworkAliases.get_alias(self._con.dst_ip)
-                if alias:
-                    _type, _operand, _data = Config.RULE_TYPE_SIMPLE, Config.OPERAND_PROCESS_PATH, self._con.process_path
-                    data.append({"type": _type, "operand": _operand, "data": _data})
-                    rule_temp_name = slugify(f"{rule_temp_name} {os.path.basename(self._con.process_path)}")
-                    alias_selected = True
-
-            if self.checkDstIP.isChecked() and self.whatCombo.itemData(what_idx) != constants.FIELD_DST_IP:
-                _type, _operand, _data = utils.get_combo_operator(
-                    self.whatIPCombo.itemData(self.whatIPCombo.currentIndex()),
-                    self.whatIPCombo.currentText(),
-                    self._con)
-                data.append({"type": _type, "operand": _operand, "data": _data})
-                rule_temp_name = slugify("%s %s" % (rule_temp_name, _data))
-
-            if self.checkDstPort.isChecked() and self.whatCombo.itemData(what_idx) != constants.FIELD_DST_PORT:
+            if self.checkDstPort.isChecked():
                 data.append({"type": Config.RULE_TYPE_SIMPLE, "operand": Config.OPERAND_DEST_PORT, "data": str(self._con.dst_port)})
                 rule_temp_name = slugify("%s %s" % (rule_temp_name, str(self._con.dst_port)))
 
-            if self.checkUserID.isChecked() and self.whatCombo.itemData(what_idx) != constants.FIELD_USER_ID:
+            if self.checkProtocol.isChecked():
+                proto_val = self.protocolCombo.currentText() if self.protocolCombo.isVisible() else self._con.protocol
+                data.append({"type": Config.RULE_TYPE_SIMPLE, "operand": Config.OPERAND_PROTOCOL, "data": proto_val.lower()})
+                rule_temp_name = slugify("%s %s" % (rule_temp_name, proto_val))
+
+            if self.checkUserID.isChecked():
                 data.append({"type": Config.RULE_TYPE_SIMPLE, "operand": Config.OPERAND_USER_ID, "data": str(self._con.user_id)})
                 rule_temp_name = slugify("%s %s" % (rule_temp_name, str(self._con.user_id)))
 
             if self.checkSum.isChecked() and self.checksumLabel.text() != "":
-                _type, _operand, _data = Config.RULE_TYPE_SIMPLE, Config.OPERAND_PROCESS_HASH_MD5, self.checksumLabel.text()
-                data.append({"type": _type, "operand": _operand, "data": _data})
-                rule_temp_name = slugify("%s %s" % (rule_temp_name, _operand))
+                data.append({"type": Config.RULE_TYPE_SIMPLE, "operand": Config.OPERAND_PROCESS_HASH_MD5, "data": self.checksumLabel.text()})
+
+            if self.checkCmdline.isChecked() and self._con.process_path != "":
+                data.append({"type": Config.RULE_TYPE_SIMPLE, "operand": Config.OPERAND_PROCESS_PATH, "data": self._con.process_path})
+
+            if self.checkArgs.isChecked():
+                cmdline = ' '.join(self._con.process_args)
+                if cmdline:
+                    data.append({"type": Config.RULE_TYPE_SIMPLE, "operand": Config.OPERAND_PROCESS_COMMAND, "data": cmdline})
+
+            if self.checkPID.isChecked():
+                data.append({"type": Config.RULE_TYPE_SIMPLE, "operand": Config.OPERAND_PROCESS_ID, "data": str(self._con.process_id)})
 
             is_list_rule = self._is_list_rule()
 
-            # If the user has selected to filter by cmdline, but the launched
-            # command path is not absolute or the first component contains
-            # "/proc/" (/proc/self/fd.., /proc/1234/fd...), we can't trust it.
-            # In these cases, also filter by the absolute path to the binary.
+            # If the user has selected to filter by cmdline, always also
+            # filter by the absolute path to the binary.
+            # argv[0] is attacker-controlled via execve(), so we cannot
+            # trust it regardless of whether it looks absolute or not.
             if self._rule.operator.operand == Config.OPERAND_PROCESS_COMMAND:
-                proc_args = " ".join(self._con.process_args)
-                proc_args = proc_args.split(" ")
-                if os.path.isabs(proc_args[0]) is False or proc_args[0].startswith("/proc"):
-                    is_list_rule = True
-                    data.append({"type": Config.RULE_TYPE_SIMPLE, "operand": Config.OPERAND_PROCESS_PATH, "data": str(self._con.process_path)})
+                is_list_rule = True
+                data.append({"type": Config.RULE_TYPE_SIMPLE, "operand": Config.OPERAND_PROCESS_PATH, "data": str(self._con.process_path)})
 
-            if is_list_rule or alias_selected:
-                data.append({
+            if is_list_rule:
+                _main_op = {
                     "type": self._rule.operator.type,
                     "operand": self._rule.operator.operand,
                     "data": self._rule.operator.data
-                })
+                }
+                if self._rule.operator.type == Config.RULE_TYPE_REGEXP:
+                    _main_op["sensitive"] = True
+                data.append(_main_op)
                 # We need to send back the operator list to the AskRule() call
                 # as json string, in order to add it to the DB.
                 self._rule.operator.data = json.dumps(data)

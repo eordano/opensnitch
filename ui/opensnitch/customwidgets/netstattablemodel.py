@@ -17,6 +17,8 @@ class NetstatTableModel(GenericTableModel):
         if role == Qt.ItemDataRole.DisplayRole or role == Qt.ItemDataRole.EditRole:
             items_count = len(self.items)
             if index.isValid() and items_count > 0 and index.row() < items_count:
+                if index.column() >= len(self.items[index.row()]):
+                    return ""
                 try:
                     # FIXME: protocol UDP + state CLOSE == state LISTEN
                     if index.column() == self.COL_STATE:

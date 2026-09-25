@@ -1,6 +1,8 @@
 import re
+from opensnitch.customwidgets.filterexpression import compile_filter, FilterError
 
 from PyQt6 import QtCore
+from PyQt6.QtCore import QCoreApplication as QC
 
 from . import (
     constants
@@ -103,7 +105,9 @@ class Queries:
             self.rules_opts[12]: "rules.operator_data"
         }
         self.reOperators = "=|!=|<>|~|!~|>~|<~|>=|>|<=|<"
-        self.reValues=r'[0-9a-zA-Z\.\-_\/:]+'
+        # a bare value, or a double-quoted one (spaces allowed, "" for a quote)
+        self.reValues=r'"(?:[^"]|"")*"|[0-9a-zA-Z\.\-_\/:]+'
+        self.reInList = re.compile(r'(\S+) IN \(((?:"(?:[^"]|"")*"|[^,)])*(?:,(?:"(?:[^"]|"")*"|[^,)])*)*)\)')
 
     def get_completer(self, idx):
         opts = self.options
@@ -125,14 +129,57 @@ class Queries:
     def get_query(self, table, fields):
         return f"SELECT {fields} FROM {table}"
 
-    def get_view_query(self, model, idx, where_clause=None):
-        """builds the query of a view"""
-        qstr = self.get_query(
-            self.win.TABLES[idx]['name'],
-            self.win.TABLES[idx]['display_fields']
-        )
+    def split_columns(self, idx, split_keys):
+        """(key, label, column) of the view's own key followed by the split dimensions"""
+        dims = {k: (label, col) for k, label, col in constants.SPLIT_DIMENSIONS}
+        key = constants.SPLIT_VIEW_KEY[idx]
+        cols = [(key, dims[key][0], dims[key][1])]
+        for k in split_keys:
+            if k != key and k in dims:
+                cols.append((k, dims[k][0], dims[k][1]))
+        return cols
+
+    def get_split_query(self, idx, split_keys, where_clause=None):
+        """summary rows grouped by the view's key plus the split dimensions,
+        counted from the connections table"""
+        cols = self.split_columns(idx, split_keys)
+        key_expr = f"c.{cols[0][2]}"
+        if idx == constants.TAB_USERS:
+            # the Users view shows "name (uid)" (the UI resolves the daemon's
+            # bare uid when it stores the users table); show the same text
+            # here so the rows keep their order when grouping is toggled
+            key_expr = ("COALESCE((SELECT u.what FROM users AS u WHERE u.what = c.uid "
+                        "OR u.what LIKE '% (' || c.uid || ')' LIMIT 1), c.uid)")
+        select = [
+            f"{key_expr} AS \"{QC.translate('stats', cols[0][1])}\"",
+            f"count(*) AS {self.win.COL_STR_HITS}",
+        ]
+        group = [f"c.{cols[0][2]}"]
+        for _, label, col in cols[1:]:
+            select.append(f"c.{col} AS \"{QC.translate('stats', label)}\"")
+            group.append(f"c.{col}")
+        qstr = "SELECT " + ", ".join(select) + " FROM connections AS c"
         if where_clause is not None:
             qstr += where_clause
+        qstr += " GROUP BY " + ", ".join(group)
+        return qstr
+
+    def get_view_query(self, model, idx, where_clause=None):
+        """builds the query of a view"""
+        split = self.win.get_split_by(idx)
+        local_text = self.win.filterBar.chipsFilterText() if hasattr(self.win, "filterBar") else ""
+        if idx in constants.SPLIT_VIEW_KEY and local_text:
+            condition = self.advanced_search(local_text)
+            where_clause = " WHERE " + condition if condition else None
+        if idx in constants.SPLIT_VIEW_KEY and (split or local_text):
+            qstr = self.get_split_query(idx, split, where_clause)
+        else:
+            qstr = self.get_query(
+                self.win.TABLES[idx]['name'],
+                self.win.TABLES[idx]['display_fields']
+            )
+            if where_clause is not None:
+                qstr += where_clause
         qstr += self.win.get_view_order()
         qstr += self.win.get_view_limit()
         return qstr
@@ -152,7 +199,12 @@ class Queries:
         translates to:
             c.dst_port > 123 AND c.dst_port < 1024
         """
+        if not text:
+            return None
+        if self.win.get_current_view_idx() == constants.TAB_NETSTAT or (hasattr(self.win, "filterBar") and any(chip.key == "expression" for chip in self.win.filterBar.chips())) or re.search(r"(?<![\w.])(?:port|ip|host|dst|process|action|proto|uid|pid|node|state|family|comm|iface)\s*[:<>=!]", text):
+            return compile_filter(text, self.filter_columns(), self.filter_value)
         has_filter = False
+        text, has_filter = self._replace_in_lists(text)
         groups=self.adv_search.findall(text)
         if groups is None:
             return None
@@ -166,27 +218,23 @@ class Queries:
             k = opt[1]
             op = opt[2]
             v = opt[3]
-            nk = None
-            cur_idx = self.win.get_current_view_idx()
-            if cur_idx == constants.TAB_RULES and self.win.in_detail_view(cur_idx) is False:
-                nk = self.rules_opt_map.get(k)
-            else:
-                nk = self.opt_map.get(k)
+            nk = self._column_of(k)
+            v = self._unquote(v)
 
             if nk is not None:
                 has_filter = True
                 if op == OP_NOT_EQUAL:
-                    text = text.replace(opt[0], nk+"!=\""+v+"\"")
+                    text = text.replace(opt[0], nk+"!="+self._sql_string(v))
                 elif op == OP_EQUAL:
-                    text = text.replace(opt[0], nk+"=\""+v+"\"")
+                    text = text.replace(opt[0], nk+"="+self._sql_string(v))
                 elif op == OP_CONTAINS:
-                    text = text.replace(opt[0], nk+" LIKE \"%"+v+"%\"")
+                    text = text.replace(opt[0], nk+" LIKE "+self._sql_string("%"+v+"%"))
                 elif op == OP_NO_CONTAINS:
-                    text = text.replace(opt[0], nk+" NOT LIKE \"%"+v+"%\"")
+                    text = text.replace(opt[0], nk+" NOT LIKE "+self._sql_string("%"+v+"%"))
                 elif op == OP_ENDS_WITH:
-                    text = text.replace(opt[0], nk+" LIKE \"%"+v+"\"")
+                    text = text.replace(opt[0], nk+" LIKE "+self._sql_string("%"+v))
                 elif op == OP_STARTS_WITH:
-                    text = text.replace(opt[0], nk+" LIKE \""+v+"%\"")
+                    text = text.replace(opt[0], nk+" LIKE "+self._sql_string(v+"%"))
                 elif op in (OP_GT, OP_GT_EQ, OP_LT, OP_LT_EQ):
                     # FIXME: we're comparing strings as integers here.
                     try:
@@ -198,6 +246,78 @@ class Queries:
         if not has_filter:
             text = None
         return text
+
+    def filter_columns(self):
+        from opensnitch.customwidgets.filterbar import FilterBarWidget
+        if self.win.get_current_view_idx() == constants.TAB_NETSTAT:
+            fields = {"dstport":"dst_port", "srcport":"src_port", "dstip":"dst_ip", "srcip":"src_ip", "proto":"proto", "process":"proc_path", "pid":"proc_pid", "uid":"uid", "node":"node"}
+            columns = {"conn."+k: "c."+v for k,v in fields.items()}
+            columns.update({"socket."+k:"c."+v for k,v in {"state":"state","family":"family","comm":"proc_comm","iface":"iface"}.items()})
+        else:
+            columns = dict(self.opt_map)
+        columns.update({k: columns[v] for k,v in FilterBarWidget.FIELD_MAP.items() if v in columns})
+        return columns
+
+    def filter_value(self, key, value):
+        if self.win.get_current_view_idx() != constants.TAB_NETSTAT:
+            return value
+        key = key.split('.')[-1]
+        names = {
+            "proto": {"tcp":6,"udp":17,"icmp":1,"icmpv6":58,"sctp":132,"raw":255},
+            "protocol": {"tcp":6,"udp":17,"icmp":1,"icmpv6":58},
+            "family": {"ipv4":2,"af_inet":2,"ipv6":10,"af_inet6":10,"af_packet":17},
+            "state": {"established":1,"listen":10,"close":7,"time_wait":6,"tcp_time_wait":6,"syn_sent":2,"syn_recv":3,"close_wait":8},
+        }
+        return names.get(key, {}).get(value.lower(), value)
+
+    def _column_of(self, key):
+        cur_idx = self.win.get_current_view_idx()
+        if cur_idx == constants.TAB_RULES and self.win.in_detail_view(cur_idx) is False:
+            return self.rules_opt_map.get(key)
+        return self.opt_map.get(key)
+
+    @staticmethod
+    def _unquote(v):
+        if len(v) >= 2 and v[0] == '"' and v[-1] == '"':
+            return v[1:-1].replace('""', '"')
+        return v
+
+    @staticmethod
+    def _sql_string(v):
+        return '"' + v.replace('"', '""') + '"'
+
+    def _replace_in_lists(self, text):
+        """conn.node IN (a,b) -> c.node IN ("a","b")"""
+        found = False
+
+        def repl(m):
+            nonlocal found
+            nk = self._column_of(m.group(1))
+            if nk is None:
+                return m.group(0)
+            values = [self._unquote(v.strip()) for v in self._split_list(m.group(2))]
+            values = [v for v in values if v != ""]
+            if not values:
+                return m.group(0)
+            found = True
+            return "{0} IN ({1})".format(nk, ",".join(self._sql_string(v) for v in values))
+
+        return self.reInList.sub(repl, text), found
+
+    @staticmethod
+    def _split_list(body):
+        """split on commas outside double quotes"""
+        parts, cur, quoted = [], "", False
+        for ch in body:
+            if ch == '"':
+                quoted = not quoted
+            if ch == "," and not quoted:
+                parts.append(cur)
+                cur = ""
+            else:
+                cur += ch
+        parts.append(cur)
+        return parts
 
     def get_filter_line(self, idx, text, adv_search=None):
         if text == "":
@@ -222,6 +342,10 @@ class Queries:
             idx == constants.TAB_ADDRS or \
             idx == constants.TAB_PORTS or \
             idx == constants.TAB_USERS:
+            split = self.win.get_split_by(idx)
+            if idx in constants.SPLIT_VIEW_KEY and split:
+                likes = [f"c.{col} LIKE '%{text}%'" for _, _, col in self.split_columns(idx, split)]
+                return " WHERE (" + " OR ".join(likes) + ")"
             return f" WHERE what LIKE '%{text}%' ".format(text)
         elif idx == constants.TAB_NETSTAT:
             if adv_search is not None:
@@ -610,7 +734,7 @@ class Queries:
                     print("setQuery() error: ", model.lastError().text())
 
                 if self.win.get_current_view_idx() != constants.TAB_MAIN:
-                    self.win.labelRowsCount.setText("{0}/{1}".format(offset if offset is not None else "0", model.totalRowCount))
+                    self.win.labelRowsCount.setText("{0}/{1}".format(getattr(model, "viewOffset", 0), model.totalRowCount))
                 else:
                     self.win.labelRowsCount.setText("")
             except Exception as e:

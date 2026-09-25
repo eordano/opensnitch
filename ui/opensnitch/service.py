@@ -89,7 +89,7 @@ class UIService(ui_pb2_grpc.UIServicer, QtWidgets.QGraphicsObject):
                 QtCore.QCoreApplication.translate("preferences", "Warning"),
                 QtCore.QCoreApplication.translate(
                     "preferences",
-                    "The DB is corrupted and it's not safe to continue.<br>\
+                    "The DB is corrupted and it is not safe to continue.<br>\
                     Remove, backup or recover the file before continuing.<br><br>\
                     Corrupted database file: {0}".format(db_file)),
                 QtWidgets.QMessageBox.Icon.Warning)
@@ -934,6 +934,23 @@ class UIService(ui_pb2_grpc.UIServicer, QtWidgets.QGraphicsObject):
             self.logger.warning("exception %s - %s", repr(context.peer()), repr(e))
         return ui_pb2.PingReply(id=request.id)
 
+    def _default_action_rule(self, con):
+        """One-shot rule carrying the UI's configured default action, for
+        prompts that produced no rule (discarded, or an exception)."""
+        action = Config.ACTION_DENY
+        default_idx = self._cfg.getInt(Config.DEFAULT_ACTION_KEY)
+        if default_idx == Config.ACTION_ALLOW_IDX:
+            action = Config.ACTION_ALLOW
+        elif default_idx == Config.ACTION_REJECT_IDX:
+            action = Config.ACTION_REJECT
+        rule = ui_pb2.Rule(name="ui.default-action", enabled=True,
+                           action=action, duration=Config.DURATION_ONCE)
+        rule.created = int(datetime.now().timestamp())
+        rule.operator.type = Config.RULE_TYPE_SIMPLE
+        rule.operator.operand = Config.OPERAND_DEST_IP
+        rule.operator.data = con.dst_ip
+        return rule
+
     def AskRule(self, request, context):
         #def callback(ntf, action, connection):
         # TODO
@@ -949,8 +966,11 @@ class UIService(ui_pb2_grpc.UIServicer, QtWidgets.QGraphicsObject):
         rule, timeout_triggered = self._prompt_dialog.promptUser(request, self._is_local_request(proto, addr), peer)
         self._last_ping = datetime.now()
         self._asking = False
-        if rule == None:
-            return None
+        if rule is None:
+            # Returning None makes grpc fail with "Failed to serialize
+            # response!" and the daemon then applies its DefaultAction. Send
+            # the same outcome as an explicit one-shot rule instead.
+            return self._default_action_rule(request)
 
         if timeout_triggered:
             node_text = "" if self._is_local_request(proto, addr) else "on node {0}:{1}".format(proto, addr)

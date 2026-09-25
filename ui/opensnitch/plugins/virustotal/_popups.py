@@ -64,7 +64,7 @@ def add_vt_response(parent, response, conn, error=None):
     #textWdg.insertPlainText(str(json.dumps(response, indent=4)))
     #textWdg.insertPlainText(_utils.report_to_ascii(response, "", ""))
     if error:
-        textWdg.insertPlainText("{0}\n\nBe sure that there's a rule to allow outbound connections from the GUI to www.virustotal.com".format(
+        textWdg.insertPlainText("{0}\n\nBe sure that there is a rule to allow outbound connections from the GUI to www.virustotal.com".format(
             error
         ))
     else:

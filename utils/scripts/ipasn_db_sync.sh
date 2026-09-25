@@ -50,6 +50,6 @@ echo "******** Updating $IPASN_FILE... ********"
 if wget --no-verbose --output-document="$IPASN_FILE" "${SOURCE_REPO}/releases/latest/download/$IPASN_FILE"; then
   echo "Downloaded ipasn data"
 else
-    echo "Failed to download ipasn data, restoring backup"
-    mv -vf "$IPASN_FILE.last" "$IPASN_FILE"
+  echo "Failed to download ipasn data, restoring backup"
+  mv -vf "$IPASN_FILE.last" "$IPASN_FILE"
 fi

@@ -20,7 +20,7 @@
 
 <p align="center"><strong>OpenSnitch</strong> is a GNU/Linux application firewall.</p>
 
-<p align="center">•• <a href="#key-features">Key Features</a> • <a href="#download">Download</a> • <a href="#installation">Installation</a> • <a href="#opensnitch-in-action">Usage examples</a> • <a href="#in-the-press">In the press</a> ••</p>
+<p align="center">-- <a href="#key-features">Key Features</a> - <a href="#download">Download</a> - <a href="#installation">Installation</a> - <a href="#opensnitch-in-action">Usage examples</a> - <a href="#in-the-press">In the press</a> --</p>
 
 <p align="center">
   <img src="https://user-images.githubusercontent.com/2742953/85205382-6ba9cb00-b31b-11ea-8e9a-bd4b8b05a236.png" alt="OpenSnitch"/>

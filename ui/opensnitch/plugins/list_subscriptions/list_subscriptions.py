@@ -158,7 +158,7 @@ class ListSubscriptions(PluginBase, metaclass=SingletonABCMeta):
     # default
     TYPE: ClassVar[list[Any]] = [PluginBase.TYPE_GLOBAL]
 
-    # UI log signal — connect to DialogStatusController.log to forward
+    # UI log signal -- connect to DialogStatusController.log to forward
     # runtime messages to the main window's live log facility.
     log_out: ClassVar[_LogSignalWrapper] = _LogSignalWrapper()
     _ui_log_bridge_handler_installed: ClassVar[bool] = False

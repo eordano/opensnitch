@@ -2,6 +2,21 @@
 #
 # This file sets up Qt and database before tests run.
 
+import os
+import tempfile
+
+# The suite never touches the person's own OpenSnitch: settings.conf and the
+# database live under a throwaway HOME, and the database stays in memory.
+# The sample nodes and connections it inserts (tests/sample_data.py) are
+# only ever seen in this process and in the screenshots under
+# tests.paths.SCREENSHOT_DIR.
+_TEST_HOME = tempfile.mkdtemp(prefix="opensnitch-ui-tests-home-")
+os.environ["HOME"] = _TEST_HOME
+os.environ["XDG_CONFIG_HOME"] = os.path.join(_TEST_HOME, ".config")
+os.environ["XDG_DATA_HOME"] = os.path.join(_TEST_HOME, ".local", "share")
+os.environ["XDG_CACHE_HOME"] = os.path.join(_TEST_HOME, ".cache")
+os.makedirs(os.environ["XDG_CONFIG_HOME"], exist_ok=True)
+
 import pytest
 from PyQt6 import QtWidgets
 from unittest.mock import patch
@@ -16,13 +31,17 @@ def init_test_environment():
     if _initialized:
         return
 
+    import opensnitch.proto as proto
+    proto.import_()
     from opensnitch.database import Database
     from opensnitch.config import Config
     from opensnitch.nodes import Nodes
 
     db = Database.instance()
     db.initialize()
+    assert db.get_db_file() == Database.DB_IN_MEMORY, "tests must run on an in-memory database"
     Config.init()
+    assert Config.get().getSettings(Config.DEFAULT_DB_FILE_KEY) == Database.DB_IN_MEMORY
 
     # Setup mock node with full structure
     from tests.dialogs import ClientConfig
